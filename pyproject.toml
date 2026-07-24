@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoliveblog"
+version = "0.1.0"
+description = "AI livestream and video summarizer for YouTube - real-time rolling summaries, smart frame analysis, catch-up mode, Telegram bot, daily digests"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [{ name = "casper88tw" }]
+keywords = ["youtube", "livestream", "summarization", "ai", "telegram-bot", "gemini", "yt-dlp"]
+dependencies = [
+  "yt-dlp>=2025.1.1",
+  "google-genai>=1.0.0",
+  "openai>=1.40.0",
+  "python-dotenv>=1.0.0",
+  "fastapi>=0.110.0",
+  "uvicorn>=0.29.0",
+  "requests>=2.31.0",
+  "winotify>=1.1.0; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+local-stt = ["faster-whisper>=1.0.0"]
+
+[project.scripts]
+autoliveblog = "autoliveblog.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/casper88/autoliveblog"
+Issues = "https://github.com/casper88/autoliveblog/issues"
+
+[tool.setuptools]
+packages = ["autoliveblog", "autoliveblog.web"]
+
+[tool.setuptools.package-data]
+"autoliveblog.web" = ["static/*"]

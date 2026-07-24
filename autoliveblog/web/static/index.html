@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>autoliveblog — YouTube 即時總結</title>
+<style>
+:root {
+  --bg: #f7f6f3; --card: #ffffff; --ink: #1a1a18; --ink2: #6b6a64;
+  --line: #e4e2db; --accent: #185fa5; --accent-bg: #e6f1fb;
+  --red: #a32d2d; --red-bg: #fcebeb; --green: #3b6d11; --green-bg: #eaf3de;
+  --amber-bg: #faeeda; --amber: #854f0b;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1c1a; --card: #262624; --ink: #ece9e2; --ink2: #a09e96;
+    --line: #3a3936; --accent: #85b7eb; --accent-bg: #0c447c;
+    --red: #f09595; --red-bg: #501313; --green: #c0dd97; --green-bg: #27500a;
+    --amber-bg: #633806; --amber: #fac775;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.65 "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif; }
+.wrap { max-width: 860px; margin: 0 auto; padding: 24px 20px 60px; }
+h1 { font-size: 20px; font-weight: 600; margin: 0; }
+h2 { font-size: 15px; font-weight: 600; color: var(--ink2); margin: 28px 0 10px; }
+header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.badge { font-size: 12px; padding: 2px 10px; border-radius: 12px; white-space: nowrap; }
+.b-red { background: var(--red-bg); color: var(--red); }
+.b-blue { background: var(--accent-bg); color: var(--accent); }
+.b-green { background: var(--green-bg); color: var(--green); }
+.b-amber { background: var(--amber-bg); color: var(--amber); }
+.card { background: var(--card); border: 1px solid var(--line);
+  border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
+input[type=text], select { background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
+  font-size: 14px; outline: none; }
+input[type=text]:focus { border-color: var(--accent); }
+button { background: transparent; color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 8px 14px; font-size: 14px; cursor: pointer; }
+button:hover { background: var(--bg); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.grow { flex: 1; min-width: 200px; }
+.muted { color: var(--ink2); font-size: 13px; }
+.small { font-size: 12px; }
+.topic { font-size: 17px; font-weight: 600; margin: 2px 0 10px; }
+.stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 10px 0; }
+.stat { background: var(--bg); border-radius: 8px; padding: 6px 14px; }
+.stat b { font-size: 18px; font-weight: 600; display: block; }
+.tl { border-left: 2px solid var(--line); padding-left: 14px;
+  display: flex; flex-direction: column; gap: 10px; margin: 10px 0; }
+.tl .pt { margin: 1px 0 0; color: var(--ink2); font-size: 13px; }
+.thumb { width: 96px; border-radius: 8px; }
+details summary { cursor: pointer; color: var(--ink2); font-size: 13px; }
+.hist-item { display: flex; gap: 10px; align-items: center; padding: 9px 4px;
+  border-top: 1px solid var(--line); font-size: 14px; cursor: pointer; }
+.hist-item:hover { background: var(--card); }
+.ellip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.md { font-size: 14px; line-height: 1.7; }
+.md h1 { font-size: 18px; } .md h2 { font-size: 16px; color: var(--ink); }
+.md a { color: var(--accent); }
+.alert { background: var(--amber-bg); color: var(--amber); border-radius: 8px;
+  padding: 6px 12px; font-size: 13px; margin: 6px 0; }
+.spin { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line);
+  border-top-color: var(--accent); border-radius: 50%; animation: sp 1s linear infinite;
+  vertical-align: -2px; }
+@keyframes sp { to { transform: rotate(360deg); } }
+#player-box { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 8px 0; }
+#player-box iframe { width: 100%; aspect-ratio: 16/9; border: 0; border-radius: 12px; }
+@media (max-width: 640px) {
+  .wrap { padding: 12px 10px 40px; }
+  .card { padding: 12px; }
+  .stats { gap: 6px; }
+  .stat { padding: 4px 10px; }
+  .hist-item { flex-wrap: wrap; }
+  header { flex-wrap: wrap; }
+  .topic { font-size: 15px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>autoliveblog</h1>
+    <span class="muted">YouTube 直播/影片即時總結</span>
+    <span style="flex:1"></span>
+    <span id="usage" class="badge b-blue" title="今日 Gemini 呼叫數">…</span>
+    <button id="notif-btn" class="small" title="開啟瀏覽器通知">🔔 通知</button>
+  </header>
+
+  <div class="card">
+    <div class="row">
+      <input type="text" id="url" class="grow" placeholder="貼上 YouTube 直播、影片或 Podcast 網址">
+      <button id="inspect-btn">檢查</button>
+      <button id="start-btn" class="primary">開始</button>
+    </div>
+    <div id="preview" style="display:none; margin-top:12px" class="row">
+      <img id="pv-thumb" class="thumb" alt="">
+      <div class="grow">
+        <div id="pv-title" style="font-weight:600"></div>
+        <div class="muted"><span id="pv-badge" class="badge"></span> <span id="pv-channel"></span> <span id="pv-dur"></span></div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label class="small"><input type="checkbox" id="opt-smart" checked> 智慧補看</label>
+      <label class="small" title="從直播開頭開始總結,快速消化歷史後接上即時"><input type="checkbox" id="opt-fromstart"> 從頭補課</label>
+      <select id="opt-chunk" class="small">
+        <option value="120">每 2 分鐘</option>
+        <option value="180" selected>每 3 分鐘</option>
+        <option value="300">每 5 分鐘</option>
+      </select>
+      <select id="opt-provider" class="small" title="AI 引擎">
+        <option value="auto" selected>引擎:自動</option>
+        <option value="gemini">引擎:Gemini</option>
+        <option value="openai">引擎:OpenAI</option>
+      </select>
+      <select id="opt-duration" class="small">
+        <option value="">看到直播結束</option>
+        <option value="10">看 10 分鐘</option>
+        <option value="30">看 30 分鐘</option>
+        <option value="60">看 60 分鐘</option>
+        <option value="120">看 2 小時</option>
+      </select>
+      <input type="text" id="opt-keywords" class="small grow" placeholder="關鍵字警報(逗號分隔,例:台積電,升息)">
+    </div>
+  </div>
+
+  <details style="margin-bottom:12px">
+    <summary class="muted">頻道訂閱(開播自動監看)</summary>
+    <div class="card" style="margin-top:8px">
+      <div class="row">
+        <input type="text" id="sub-url" class="grow" placeholder="頻道網址,例:https://www.youtube.com/@ustvbiz">
+        <input type="text" id="sub-keywords" class="small" style="width:180px" placeholder="關鍵字警報(選填)">
+        <button id="sub-add">新增訂閱</button>
+      </div>
+      <div id="subs" style="margin-top:8px"></div>
+    </div>
+  </details>
+
+  <div id="player-box" style="display:none"></div>
+  <div id="jobs"></div>
+
+  <h2>歷史紀錄</h2>
+  <div class="row" style="margin-bottom:8px">
+    <input type="text" id="q-all" class="grow small" placeholder="跨所有歷史總結提問,例:游庭皓最近對台積電的看法?">
+    <button id="askall-btn" class="small">問全部</button>
+  </div>
+  <div class="md small" id="ans-all"></div>
+  <div class="row" style="margin-bottom:8px">
+    <input type="text" id="hist-search" class="grow small" placeholder="搜尋標題或頻道">
+    <button id="hist-refresh" class="small">重新整理</button>
+  </div>
+  <div id="history"></div>
+  <div id="viewer" class="card md" style="display:none"></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

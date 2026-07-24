@@ -1,0 +1,10 @@
+yt-dlp>=2025.1.1
+google-genai>=1.0.0
+openai>=1.40.0
+python-dotenv>=1.0.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
+requests>=2.31.0
+winotify>=1.1.0; sys_platform == "win32"
+# optional: local free transcription (AUTOLIVEBLOG_STT_PROVIDER=local)
+# faster-whisper>=1.0.0
