@@ -135,6 +135,10 @@ class OpenAISummarizer:
     def summarize_audio(self, path: Path, title: str, channel: str) -> str:
         from .summarizer import _audio_duration
         dur = _audio_duration(path)
+        # ffprobe 讀不到時長時不能靜默放行(那會讓花費護欄形同虛設),
+        # 改用檔案大小以 48kbps 保守反推分鐘數
+        if dur <= 0:
+            dur = path.stat().st_size * 8 / 48_000
         est = dur / 60 * 0.003
         if est > config.MAX_AUTO_SPEND_USD:
             raise RuntimeError(

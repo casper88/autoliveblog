@@ -52,28 +52,35 @@ Works with any site yt-dlp supports (YouTube, Twitch, and more). Windows-first l
 ## Usage
 
 ```
-web.bat                          Web UI at http://127.0.0.1:8766 (includes the Telegram bot)
-alb.bat "<url>"                 One-shot summary (auto-detects live vs. video)
-alb.bat "<url>" --smart         Live watch with smart screenshot analysis
-alb.bat "<url>" --from-start    Catch up from the beginning of a live stream
+web.bat                        Web UI at http://127.0.0.1:8766 (includes the Telegram bot)
+alb.bat "<url>"                One-shot summary (auto-detects live vs. video)
+alb.bat "<url>" --smart        Live watch with smart screenshot analysis
+alb.bat "<url>" --from-start   Catch up from the beginning of a live stream
+alb-bg.bat "<url>"             Same as alb.bat, in a minimized background window
 ```
 
 Autostart at login (with the self-healing watchdog): put a shortcut to `watchdog.vbs` into the Startup folder (`Win+R` then `shell:startup`).
 
 ### Telegram commands
 
-`/watch <url>`, `/now`, `/ask <question>`, `/stop`, `/jobs`, `/sub <channel-url>` (go-live notification with a one-tap start button), `/subs`, `/digest`, `/askall <question>`, `/glossary <channel> <terms>`
+`/watch <url>`, `/now`, `/ask <question>`, `/stop`, `/jobs`, `/history`, `/sub <channel-url>` (go-live notification with a one-tap start button), `/go <id>`, `/subs`, `/pause <id>`, `/resume <id>`, `/unsub <id>`, `/digest`, `/askall <question>`, `/glossary <channel> <terms>`
 
 ### Configuration (environment variables, all optional)
 
 | Variable | Default | Description |
 |---|---|---|
+| `AUTOLIVEBLOG_PROVIDER` | auto | Engine: `auto` (Gemini then OpenAI), `gemini`, or `openai` |
+| `AUTOLIVEBLOG_MODEL` | gemini-2.5-flash | Gemini model |
+| `AUTOLIVEBLOG_LANG` | 繁體中文 | Output language of the summaries |
 | `AUTOLIVEBLOG_CHUNK_SECONDS` | 180 | Live summary interval in seconds |
 | `AUTOLIVEBLOG_DIGEST_TIME` | 12:30 | Daily digest time (empty to disable) |
 | `AUTOLIVEBLOG_MAX_AUTO_SPEND_USD` | 0.25 | Per-job OpenAI transcription spending cap |
 | `AUTOLIVEBLOG_STT_PROVIDER` | openai | `local` uses faster-whisper (free) |
+| `AUTOLIVEBLOG_STT_LANG` | (empty) | Transcription language; empty = auto-detect |
 | `AUTOLIVEBLOG_SUB_POLL_SECONDS` | 300 | Subscription go-live poll interval |
 | `AUTOLIVEBLOG_OBSIDIAN_VAULT` | (empty) | Auto-copy summaries into an Obsidian vault |
+
+Advanced: `AUTOLIVEBLOG_OPENAI_MODEL`, `AUTOLIVEBLOG_OPENAI_STT_MODEL`, `AUTOLIVEBLOG_OUTPUT_DIR` — see `.env.example`.
 
 ## Notes
 

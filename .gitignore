@@ -16,3 +16,12 @@ __pycache__/
 *.pyc
 .claude/
 tools/
+
+# yt-dlp download scratch
+*.part
+*.ytdl
+
+# build artifacts
+dist/
+build/
+*.egg-info/

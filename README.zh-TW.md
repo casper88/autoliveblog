@@ -52,28 +52,35 @@ YouTube 直播與影片的 AI 總結工具 — 直播即時滾動總結(含畫�
 ## 使用
 
 ```
-web.bat                          網頁介面 http://127.0.0.1:8766(含 Telegram 機器人)
-alb.bat "網址"                   單次總結(自動判斷直播或影片)
-alb.bat "網址" --smart           直播監看+智慧補看畫面
-alb.bat "網址" --from-start      從直播開頭補課
+web.bat                       網頁介面 http://127.0.0.1:8766(含 Telegram 機器人)
+alb.bat "網址"                單次總結(自動判斷直播或影片)
+alb.bat "網址" --smart        直播監看+智慧補看畫面
+alb.bat "網址" --from-start   從直播開頭補課
+alb-bg.bat "網址"             同 alb.bat,但在最小化的背景視窗執行
 ```
 
 開機自動啟動(含看門狗自癒):把 `watchdog.vbs` 的捷徑放進「啟動」資料夾(`Win+R` 輸入 `shell:startup`)。
 
 ### Telegram 指令
 
-`/watch 網址`、`/now`、`/ask 問題`、`/stop`、`/jobs`、`/sub 頻道網址`(開播通知+一鍵開始按鈕)、`/subs`、`/digest`(今日晨報)、`/askall 問題`(跨歷史總結)、`/glossary 頻道 詞1,詞2`
+`/watch 網址`、`/now`、`/ask 問題`、`/stop`、`/jobs`、`/history`、`/sub 頻道網址`(開播通知+一鍵開始按鈕)、`/go ID`、`/subs`、`/pause ID`、`/resume ID`、`/unsub ID`、`/digest`(今日晨報)、`/askall 問題`(跨歷史總結)、`/glossary 頻道 詞1,詞2`
 
 ### 設定(環境變數,皆選填)
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
+| `AUTOLIVEBLOG_PROVIDER` | auto | 引擎:`auto`(Gemini 優先、額度耗盡切 OpenAI)、`gemini`、`openai` |
+| `AUTOLIVEBLOG_MODEL` | gemini-2.5-flash | Gemini 模型 |
+| `AUTOLIVEBLOG_LANG` | 繁體中文 | 總結輸出語言 |
 | `AUTOLIVEBLOG_CHUNK_SECONDS` | 180 | 直播每幾秒總結一次 |
 | `AUTOLIVEBLOG_DIGEST_TIME` | 12:30 | 每日晨報時間(留空停用) |
 | `AUTOLIVEBLOG_MAX_AUTO_SPEND_USD` | 0.25 | 單次任務 OpenAI 轉錄花費上限 |
 | `AUTOLIVEBLOG_STT_PROVIDER` | openai | 設 `local` 用 faster-whisper 免費轉錄 |
+| `AUTOLIVEBLOG_STT_LANG` | (空) | 轉錄語言;空=自動偵測 |
 | `AUTOLIVEBLOG_SUB_POLL_SECONDS` | 300 | 訂閱開播檢查間隔(秒) |
 | `AUTOLIVEBLOG_OBSIDIAN_VAULT` | (空) | 設定後總結自動複製到 Obsidian |
+
+進階:`AUTOLIVEBLOG_OPENAI_MODEL`、`AUTOLIVEBLOG_OPENAI_STT_MODEL`、`AUTOLIVEBLOG_OUTPUT_DIR` — 見 `.env.example`。
 
 ## 注意事項
 

@@ -254,9 +254,10 @@ class TgBot:
                             .split(",") if k.strip()]
             r = server.add_sub(server.SubRequest(channel_url=parts[0],
                                                  keywords=keywords))
+            mins = max(1, config.SUB_POLL_SECONDS // 60)
             self.send_text(chat_id,
-                           f"🔔 已訂閱(ID {r['id']})。每 3 分鐘檢查一次,"
-                           "開播就自動開始監看並推播"
+                           f"🔔 已訂閱(ID {r['id']})。每 {mins} 分鐘檢查一次,"
+                           "開播會推播通知並附「開始總結」按鈕(按了才開始,不會自動燒額度)"
                            + (f";關鍵字:{_esc('、'.join(keywords))}" if keywords else "")
                            + "。/subs 看清單。")
 
