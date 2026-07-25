@@ -8,7 +8,7 @@ from . import config
 
 # 每百萬 token 美元價;audio_per_min 為轉錄每分鐘美元價
 PRICES = {
-    "gemini": {"in": 0.30, "out": 2.50},          # gemini-2.5-flash 付費層等值
+    "gemini": {"in": 0.10, "out": 0.40},          # flash-lite 付費層等值
     "openai": {"in": 0.15, "out": 0.60,           # gpt-4o-mini
                "audio_per_min": 0.003},           # gpt-4o-mini-transcribe
 }

@@ -92,4 +92,6 @@ def test_stats_cost_math(tmp_path, monkeypatch):
     assert snap["openai"]["usd"] == pytest.approx(0.15 + 0.03)
     stats.record_usage("gemini", in_tokens=0, out_tokens=1_000_000)
     snap = stats.snapshot()
-    assert snap["gemini"]["usd_equivalent"] == pytest.approx(2.50)
+    # 1M 輸出 tokens × flash-lite 出價
+    assert snap["gemini"]["usd_equivalent"] == pytest.approx(
+        stats.PRICES["gemini"]["out"])

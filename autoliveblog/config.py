@@ -22,7 +22,9 @@ def env(name: str, default: str = "") -> str:
 
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-MODEL = env("MODEL", "gemini-2.5-flash")
+# flash-lite 系列同樣支援音訊與圖片理解,免費層額度較寬、付費價格約 flash 的 1/3。
+# 注意:gemini-2.5-flash 已對新專案下架,不要當預設值。
+MODEL = env("MODEL", "gemini-3.5-flash-lite")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = env("OPENAI_MODEL", "gpt-4o-mini")

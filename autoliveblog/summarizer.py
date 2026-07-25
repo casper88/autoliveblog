@@ -301,6 +301,22 @@ class GeminiSummarizer:
                                           "UNAUTHENTICATED")):
                     stats.record_failure()
                     raise RuntimeError(f"Gemini 金鑰無效或無權限:{msg}") from e
+                # 模型不存在/已下架:重試同一個模型永遠不會成功,直接拋出可行動的訊息
+                if "NOT_FOUND" in msg or "no longer available" in msg:
+                    stats.record_failure()
+                    raise RuntimeError(
+                        f"Gemini 模型「{self.model}」無法使用(可能已對新專案下架)。"
+                        f"請改用可用的模型,例如設環境變數 "
+                        f"AUTOLIVEBLOG_MODEL=gemini-3.5-flash-lite。原始錯誤:{msg[:200]}"
+                    ) from e
+                # 付費專案的預付點數耗盡:等待重試無用,需要儲值或改用免費層金鑰
+                if "prepayment credits" in msg or "billing" in msg.lower():
+                    stats.record_failure()
+                    raise RuntimeError(
+                        "Gemini 專案的預付點數已用盡(這不是每日免費額度問題)。"
+                        "請到 https://ai.studio/projects 儲值,或改用未綁定帳單的"
+                        f"免費層金鑰。原始錯誤:{msg[:200]}"
+                    ) from e
                 stats.record_retry(msg)
                 wait = 15 * (attempt + 1)
                 print(f"  [Gemini 呼叫失敗,{wait}s 後重試 {attempt+1}/{retries}] {e}")
@@ -320,7 +336,9 @@ class GeminiSummarizer:
 # ---------- 引擎工廠與自動切換 ----------
 
 _QUOTA_MARKERS = ("RESOURCE_EXHAUSTED", "429", "quota", "rate limit",
-                  "503", "UNAVAILABLE")
+                  "503", "UNAVAILABLE",
+                  # 模型下架(404)也該切備援,重試同一個模型永遠不會成功
+                  "NOT_FOUND", "no longer available")
 _RETRY_PRIMARY_AFTER = 600  # 切到備援後,幾秒後回頭再試免費引擎
 
 

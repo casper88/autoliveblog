@@ -70,7 +70,7 @@ Autostart at login (with the self-healing watchdog): put a shortcut to `watchdog
 | Variable | Default | Description |
 |---|---|---|
 | `AUTOLIVEBLOG_PROVIDER` | auto | Engine: `auto` (Gemini then OpenAI), `gemini`, or `openai` |
-| `AUTOLIVEBLOG_MODEL` | gemini-2.5-flash | Gemini model |
+| `AUTOLIVEBLOG_MODEL` | gemini-3.5-flash-lite | Gemini model (lite tiers also handle audio and images) |
 | `AUTOLIVEBLOG_LANG` | 繁體中文 | Output language of the summaries |
 | `AUTOLIVEBLOG_CHUNK_SECONDS` | 180 | Live summary interval in seconds |
 | `AUTOLIVEBLOG_DIGEST_TIME` | 12:30 | Daily digest time (empty to disable) |

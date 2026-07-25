@@ -70,7 +70,7 @@ alb-bg.bat "網址"             同 alb.bat,但在最小化的背景視窗執行
 | 變數 | 預設 | 說明 |
 |---|---|---|
 | `AUTOLIVEBLOG_PROVIDER` | auto | 引擎:`auto`(Gemini 優先、額度耗盡切 OpenAI)、`gemini`、`openai` |
-| `AUTOLIVEBLOG_MODEL` | gemini-2.5-flash | Gemini 模型 |
+| `AUTOLIVEBLOG_MODEL` | gemini-3.5-flash-lite | Gemini 模型(lite 系列同樣支援音訊與圖片)|
 | `AUTOLIVEBLOG_LANG` | 繁體中文 | 總結輸出語言 |
 | `AUTOLIVEBLOG_CHUNK_SECONDS` | 180 | 直播每幾秒總結一次 |
 | `AUTOLIVEBLOG_DIGEST_TIME` | 12:30 | 每日晨報時間(留空停用) |
