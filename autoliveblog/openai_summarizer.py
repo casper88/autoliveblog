@@ -197,7 +197,7 @@ class OpenAISummarizer:
         if topics:
             topic_field = (',\n  "topic_hits": [內容若與這些主題「語意相關」'
                            f'(不必字面出現),列出相關者:{topics};否則空陣列]')
-        prompt = f"""你正在即時追蹤 YouTube 直播「{title}」。以下是直播中 {elapsed_label} 左右片段的逐字稿:
+        prompt = f"""你正在即時追蹤直播「{title}」。以下是直播中 {elapsed_label} 左右片段的逐字稿:
 === 逐字稿 ===
 {transcript or "(這段沒有可辨識的語音)"}
 {context}{visual_note}{self._gloss_note()}
@@ -247,7 +247,7 @@ class OpenAISummarizer:
 
     def finalize_live(self, state: LiveState, title: str) -> str:
         timeline = "\n\n".join(state.timeline) if state.timeline else "(無記錄)"
-        prompt = f"""以下是 YouTube 直播「{title}」的即時記錄時間軸。請用{self.lang}寫出最終完整總結,包含:
+        prompt = f"""以下是直播「{title}」的即時記錄時間軸。請用{self.lang}寫出最終完整總結,包含:
 1. **一句話結論**
 2. **討論了哪些主題**(依時間順序,附時間點)
 3. **關鍵重點與結論**(具體:人名、數字、決定)

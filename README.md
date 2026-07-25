@@ -33,7 +33,9 @@ Every push carries inline buttons, so you never have to remember which job to ch
 - **Web UI** — job cards with live timeline, embedded player, history browser, usage and cost meter
 - **Self-healing** — login autostart, health-check watchdog, auto-restart with job recovery, weekly yt-dlp auto-update
 
-**Platforms.** The capture pipeline runs on yt-dlp, so any site it supports can be summarized. Platform-specific behaviour (go-live checks, timestamp deep links, the embedded player) lives in `autoliveblog/platforms.py`; YouTube is fully wired, Twitch and Kick are configured, and anything else falls back to a generic adapter that still summarizes but skips deep links. Adding a platform is one entry in that table. Windows-first launchers; the Python core is cross-platform.
+**Sources.** YouTube and Twitch livestreams are both verified end to end. The capture pipeline runs on yt-dlp, so any site it supports can be summarized; platform-specific behaviour (go-live checks, timestamp deep links, the embedded player) lives in `autoliveblog/platforms.py`, where adding a platform is a single table entry, and unknown sites fall back to a generic adapter that still summarizes but skips deep links.
+
+**Podcasts.** Paste an RSS/Atom feed URL and it grabs the latest episode, downloads the audio and summarizes it. Subscribe to a feed and you get a Telegram notification when a new episode drops, with the same one-tap start button as livestreams. Windows-first launchers; the Python core is cross-platform.
 
 ## Install
 

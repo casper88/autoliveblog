@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from .. import config, live, platforms, stats, vod, ytdl
+from .. import config, feeds, live, platforms, stats, vod, ytdl
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -168,10 +168,27 @@ def _recover_jobs():
             print(f"[recover] 恢復失敗:{e}")
 
 
+def _feed_info(feed_url: str) -> dict:
+    """RSS feed → 與 yt-dlp info 相容的字典(最新一集)。"""
+    ep = feeds.latest_episode(feed_url)
+    if not ep:
+        raise RuntimeError(f"這個 feed 沒有可用的音檔集數:{feed_url}")
+    return {
+        "title": ep.title, "uploader": ep.feed_title,
+        "id": re.sub(r"[^\w-]", "", ep.guid)[-24:] or "episode",
+        "duration": ep.duration or 0, "is_live": False,
+        "webpage_url": ep.page_url or feed_url,
+        "_direct_audio_url": ep.audio_url,
+    }
+
+
 def _run_job(job: Job):
     req = job.req
     try:
-        info = ytdl.get_info(req.url)
+        if feeds.looks_like_feed(req.url):
+            info = _feed_info(req.url)
+        else:
+            info = ytdl.get_info(req.url)
         job.title = info.get("title", "")
         job.video_id = info.get("id", "")
         job.thumbnail = info.get("thumbnail", "") or ""
@@ -271,7 +288,10 @@ async def job_events(jid: str):
 async def inspect(req: WatchRequest):
     loop = asyncio.get_event_loop()
     try:
-        info = await loop.run_in_executor(None, ytdl.get_info, req.url)
+        if feeds.looks_like_feed(req.url):
+            info = await loop.run_in_executor(None, _feed_info, req.url)
+        else:
+            info = await loop.run_in_executor(None, ytdl.get_info, req.url)
     except Exception as e:
         raise HTTPException(400, f"無法讀取網址:{e}")
     return {
@@ -389,28 +409,48 @@ def _poll_subs_once():
         subs = [dict(s, id=k) for k, s in SUBS.items() if s.get("enabled", True)]
     for s in subs:
         sid = s["id"]
+        is_feed = feeds.looks_like_feed(s["channel_url"])
+        info = {}
         try:
-            info = ytdl.get_info(_live_url_of(s["channel_url"]))
-            vid = info.get("id", "")
-            is_live = bool(info.get("is_live"))
+            if is_feed:
+                # Podcast:有「新集數」就等同於「開播」
+                info = _feed_info(s["channel_url"])
+                vid, is_live = info.get("id", ""), True
+            else:
+                info = ytdl.get_info(_live_url_of(s["channel_url"]))
+                vid = info.get("id", "")
+                is_live = bool(info.get("is_live"))
         except Exception:
             vid, is_live = "", False
         with _SUBS_LOCK:
             if sid not in SUBS:
                 continue
             SUBS[sid]["last_check"] = time.time()
-            SUBS[sid]["live_now"] = is_live
+            SUBS[sid]["is_feed"] = is_feed
+            # feed 沒有「正在直播」的概念,只有新集數;不要讓清單一直顯示直播中
+            SUBS[sid]["live_now"] = False if is_feed else is_live
             SUBS[sid]["live_title"] = (info.get("title") or "") if is_live else ""
             if is_live and vid and vid != SUBS[sid].get("last_started"):
-                # 開播只記錄+通知,不自動開始;使用者點 /go 才啟動補課+即時
+                # 只記錄+通知,不自動開始;使用者按按鈕才啟動
+                first_seen = not SUBS[sid].get("last_started")
                 SUBS[sid]["last_started"] = vid
                 _save_subs()  # 只有 last_started 變更才寫檔
-                ch = SUBS[sid]["channel_url"].rstrip("/").rsplit("/", 1)[-1]
+                ch = (info.get("uploader") if is_feed else None) or \
+                    SUBS[sid]["channel_url"].rstrip("/").rsplit("/", 1)[-1]
                 title = (info.get("title") or "")[:80]
-                _notify_tg(f"🔴 <b>{ch}</b> 開播了!\n{title}\n\n"
-                           f"想聽再按下面的按鈕(會先補課開播至今的內容,"
-                           f"再接上即時總結),不按就只是通知。",
-                           buttons=[[("▶ 開始總結", f"/go {sid}")]])
+                # 剛訂閱時的「最新一集」不算新內容,只記錄不打擾
+                if is_feed and first_seen:
+                    continue
+                if is_feed:
+                    _notify_tg(f"🎧 <b>{ch}</b> 有新一集!\n{title}\n\n"
+                               f"想聽再按下面的按鈕(會下載音檔並總結),"
+                               f"不按就只是通知。",
+                               buttons=[[("▶ 開始總結", f"/go {sid}")]])
+                else:
+                    _notify_tg(f"🔴 <b>{ch}</b> 開播了!\n{title}\n\n"
+                               f"想聽再按下面的按鈕(會先補課開播至今的內容,"
+                               f"再接上即時總結),不按就只是通知。",
+                               buttons=[[("▶ 開始總結", f"/go {sid}")]])
 
 
 def _subs_poller():
@@ -475,19 +515,26 @@ def _notify_tg(text: str, buttons=None):
 
 
 def start_sub_watch(sid: str) -> Job:
-    """使用者按下 /go:從開播處補課並接上即時總結。"""
+    """使用者按下按鈕:直播→從開播處補課並接上即時;Podcast→總結最新一集。"""
     with _SUBS_LOCK:
         s = SUBS.get(sid)
         if not s:
             raise KeyError("訂閱不存在")
         vid = s.get("last_started")
         if not vid:
-            raise KeyError("這個訂閱目前沒有偵測到開播記錄")
-        req = WatchRequest(url=f"https://www.youtube.com/watch?v={vid}",
-                           mode="live", chunk=s.get("chunk"),
-                           smart=False, from_start=True,
-                           keywords=s.get("keywords") or [])
-    return launch_job(req)
+            raise KeyError("這個訂閱目前沒有偵測到新內容")
+        ch_url = s["channel_url"]
+        kw = s.get("keywords") or []
+        chunk = s.get("chunk")
+    if feeds.looks_like_feed(ch_url):
+        # Podcast:直接把 feed 網址交給 VOD 管線(它會抓最新一集)
+        return launch_job(WatchRequest(url=ch_url, mode="vod", keywords=kw))
+    # 直播:YouTube 要指向該場次的影片網址;Twitch 等平台的直播就在頻道頁上
+    plat = platforms.detect(ch_url)
+    watch = (platforms.watch_url(plat, vid) if plat.key == "youtube"
+             else _live_url_of(ch_url))
+    return launch_job(WatchRequest(url=watch, mode="live", chunk=chunk,
+                                   smart=False, from_start=True, keywords=kw))
 
 
 @app.post("/api/subscriptions/{sid}/go")
@@ -554,7 +601,7 @@ def answer_question(question: str, job_id: str | None = None,
     else:
         raise KeyError("需要 job_id 或 history_name")
 
-    prompt = (f"以下是一個 YouTube 直播/影片的即時總結記錄:\n\n{context}\n\n"
+    prompt = (f"以下是一個直播/影片的即時總結記錄:\n\n{context}\n\n"
               f"使用者的問題:{question}\n"
               f"請根據上面的記錄用繁體中文簡潔回答;"
               f"記錄裡沒有的資訊請直接說沒有提到,不要腦補。")

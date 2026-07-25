@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
     _force_utf8_console()
     parser = argparse.ArgumentParser(
         prog="autoliveblog",
-        description="YouTube 直播即時總結 / 影片與 Podcast 總結(Gemini 驅動)")
+        description="直播即時總結 / 影片與 Podcast 總結(支援 YouTube、Twitch、Podcast RSS 等)")
     parser.add_argument("url", help="YouTube 影片、直播或其他 yt-dlp 支援的網址")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--live", action="store_true", help="強制使用直播模式")

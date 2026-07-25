@@ -12,6 +12,20 @@ def _safe_name(s: str, limit: int = 60) -> str:
     return re.sub(r'[\\/:*?"<>|\s]+', "_", s).strip("_")[:limit]
 
 
+def _download_direct(audio_url: str, out_dir: Path) -> Path:
+    """下載 Podcast enclosure 音檔(RSS 來源不經過 yt-dlp)。"""
+    import requests
+    ext = Path(audio_url.split("?")[0]).suffix or ".mp3"
+    dst = out_dir / f"episode{ext}"
+    with requests.get(audio_url, stream=True, timeout=120,
+                      headers={"User-Agent": "autoliveblog/0.1"}) as r:
+        r.raise_for_status()
+        with open(dst, "wb") as f:
+            for chunk in r.iter_content(1 << 16):
+                f.write(chunk)
+    return dst
+
+
 def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
         dry_run: bool = False, provider: str | None = None, on_event=None,
         cookies_from_browser: str | None = None) -> Path | None:
@@ -24,16 +38,21 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
     print(f"頻道:{channel}  長度:{duration // 60} 分 {duration % 60} 秒")
     emit({"type": "started", "title": title, "video_id": vid, "duration": duration})
 
+    # Podcast RSS:info 已帶直接音檔網址,沒有字幕可抓,跳過字幕階段
+    direct_audio = info.get("_direct_audio_url")
+
     tmp = ytdl.make_temp_dir("autoliveblog_vod_")
     try:
         transcript = None
-        print("嘗試下載字幕…")
-        emit({"type": "status", "status": "subtitles"})
-        try:
-            vtt = ytdl.download_subtitles(url, tmp, cookies_from_browser)
-        except Exception as e:
-            print(f"  字幕下載失敗:{e}")
-            vtt = None
+        vtt = None
+        if not direct_audio:
+            print("嘗試下載字幕…")
+            emit({"type": "status", "status": "subtitles"})
+            try:
+                vtt = ytdl.download_subtitles(url, tmp, cookies_from_browser)
+            except Exception as e:
+                print(f"  字幕下載失敗:{e}")
+                vtt = None
         if vtt:
             cues = subtitles.parse_vtt(vtt)
             if cues:
@@ -58,9 +77,12 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
                   "source": "subtitles", "chars": len(transcript)})
             summary = summarizer.summarize_text(title, channel, transcript)
         else:
-            print("沒有字幕,下載音訊中…")
+            print("沒有字幕,下載音訊中…" if not direct_audio else "下載 Podcast 音檔中…")
             emit({"type": "status", "status": "downloading_audio"})
-            audio = ytdl.download_audio(url, tmp, cookies_from_browser)
+            if direct_audio:
+                audio = _download_direct(direct_audio, tmp)
+            else:
+                audio = ytdl.download_audio(url, tmp, cookies_from_browser)
             size_mb = audio.stat().st_size / 1024 / 1024
             print(f"  音訊下載完成({audio.name},{size_mb:.1f} MB),交給 Gemini 聆聽總結中…")
             emit({"type": "status", "status": "summarizing", "source": "audio",
