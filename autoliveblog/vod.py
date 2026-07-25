@@ -12,17 +12,55 @@ def _safe_name(s: str, limit: int = 60) -> str:
     return re.sub(r'[\\/:*?"<>|\s]+', "_", s).strip("_")[:limit]
 
 
+_AUDIO_EXT = (".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac", ".mp4")
+
+
 def _download_direct(audio_url: str, out_dir: Path) -> Path:
-    """下載 Podcast enclosure 音檔(RSS 來源不經過 yt-dlp)。"""
+    """下載 Podcast enclosure 音檔(RSS 來源不經過 yt-dlp)。
+
+    有大小與時間上限:enclosure 可能指向無限長的網路電台,不設限會塞爆磁碟。
+    """
+    import time
+    from urllib.parse import urlparse
+
     import requests
-    ext = Path(audio_url.split("?")[0]).suffix or ".mp3"
+
+    parsed = urlparse(audio_url)
+    if parsed.scheme not in ("http", "https"):
+        raise RuntimeError(f"不支援的音檔網址:{audio_url[:80]}")
+    # 副檔名只接受已知音訊格式,避免奇怪路徑產生無效檔名或錯誤 MIME
+    ext = Path(parsed.path).suffix.lower()
+    if ext not in _AUDIO_EXT:
+        ext = ".mp3"
     dst = out_dir / f"episode{ext}"
-    with requests.get(audio_url, stream=True, timeout=120,
+
+    limit = config.MAX_AUDIO_MB * 1024 * 1024
+    deadline = time.monotonic() + config.MAX_DOWNLOAD_SECONDS
+    written = 0
+    with requests.get(audio_url, stream=True, timeout=(15, 60),
                       headers={"User-Agent": "autoliveblog/0.1"}) as r:
         r.raise_for_status()
+        declared = int(r.headers.get("Content-Length") or 0)
+        if declared and declared > limit:
+            raise RuntimeError(
+                f"音檔 {declared / 1024 / 1024:.0f} MB 超過上限 "
+                f"{config.MAX_AUDIO_MB} MB(可調 AUTOLIVEBLOG_MAX_AUDIO_MB)")
         with open(dst, "wb") as f:
             for chunk in r.iter_content(1 << 16):
                 f.write(chunk)
+                written += len(chunk)
+                # Content-Length 可能不存在(chunked/直播串流),逐塊檢查才擋得住
+                if written > limit:
+                    f.close()
+                    dst.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"音檔超過 {config.MAX_AUDIO_MB} MB 上限,已中止下載"
+                        "(這個 enclosure 可能是無限長的串流)")
+                if time.monotonic() > deadline:
+                    f.close()
+                    dst.unlink(missing_ok=True)
+                    raise RuntimeError(
+                        f"下載超過 {config.MAX_DOWNLOAD_SECONDS // 60} 分鐘上限,已中止")
     return dst
 
 

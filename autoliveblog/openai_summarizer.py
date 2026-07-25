@@ -16,6 +16,12 @@ from .summarizer import LiveState, _parse_seconds_list
 _QA_RULES = "記錄裡沒有的資訊請直接說沒有提到,不要腦補。"
 
 
+def _safe_stem(s: str, limit: int = 80) -> str:
+    """把「頻道_標題」轉成安全的檔名主幹。"""
+    import re
+    return re.sub(r'[\\/:*?"<>|\s]+', "_", s).strip("_")[:limit]
+
+
 class OpenAISummarizer:
     provider = "openai"
 
@@ -139,18 +145,21 @@ class OpenAISummarizer:
         # 改用檔案大小以 48kbps 保守反推分鐘數
         if dur <= 0:
             dur = path.stat().st_size * 8 / 48_000
-        est = dur / 60 * 0.003
-        if est > config.MAX_AUTO_SPEND_USD:
-            raise RuntimeError(
-                f"音訊長 {dur / 60:.0f} 分鐘,OpenAI 轉錄約需 ${est:.2f},"
-                f"超過自動花費上限 ${config.MAX_AUTO_SPEND_USD}。"
-                f"若確定要花,請設環境變數 AUTOLIVEBLOG_MAX_AUTO_SPEND_USD 提高上限,"
-                f"或等字幕生成後改用字幕路徑。")
+        # 本地 Whisper 不花錢,花費護欄不該擋它
+        if config.STT_PROVIDER != "local":
+            est = dur / 60 * 0.003
+            if est > config.MAX_AUTO_SPEND_USD:
+                raise RuntimeError(
+                    f"音訊長 {dur / 60:.0f} 分鐘,OpenAI 轉錄約需 ${est:.2f},"
+                    f"超過自動花費上限 ${config.MAX_AUTO_SPEND_USD}。"
+                    f"若確定要花,請設 AUTOLIVEBLOG_MAX_AUTO_SPEND_USD 提高上限,"
+                    f"或設 AUTOLIVEBLOG_STT_PROVIDER=local 用本地免費轉錄。")
         transcript = self._transcribe_file(path)
-        # 付費轉錄的逐字稿永久保存,避免重複花費
+        # 付費轉錄的逐字稿永久保存,避免重複花費;檔名帶節目與標題才不會互相覆寫
         tdir = config.OUTPUT_DIR / "transcripts"
         tdir.mkdir(parents=True, exist_ok=True)
-        (tdir / f"{path.stem}.txt").write_text(transcript, encoding="utf-8")
+        stem = _safe_stem(f"{channel}_{title}") or path.stem
+        (tdir / f"{stem}.txt").write_text(transcript, encoding="utf-8")
         return self.summarize_text(title, channel, transcript)
 
     def _transcribe_file(self, path: Path) -> str:

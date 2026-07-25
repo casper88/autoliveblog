@@ -281,14 +281,20 @@ class TgBot:
             lines = []
             btns = []
             for s in subs:
-                st = "🔴 直播中" if s.get("live_now") else \
-                     ("⏸ 已暫停" if not s.get("enabled", True) else "⚪ 未開播")
+                if not s.get("enabled", True):
+                    st = "⏸ 已暫停"
+                elif s.get("last_error"):
+                    st = "⚠ 檢查失敗"
+                elif s.get("is_feed"):
+                    st = "🎧 Podcast" if s.get("startable") else "🎧 尚無集數"
+                else:
+                    st = "🔴 直播中" if s.get("live_now") else "⚪ 未開播"
                 kw = f" ⚡{_esc('、'.join(s['keywords']))}" if s.get("keywords") else ""
                 lines.append(f"<code>{s['id']}</code> {st} "
                              f"{_esc(s['channel_url'])}{kw}")
                 tag = s["channel_url"].rstrip("/").rsplit("/", 1)[-1][:12]
                 row = []
-                if s.get("live_now"):
+                if s.get("startable"):
                     row.append((f"▶ 開始 {tag}", f"/go {s['id']}"))
                 row.append((("▶ 恢復" if not s.get("enabled", True)
                              else "⏸ 暫停") + f" {tag}",

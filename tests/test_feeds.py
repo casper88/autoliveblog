@@ -87,3 +87,53 @@ def test_duration_parser_edge_cases():
     assert feeds._parse_duration("abc") is None
     assert feeds._parse_duration("90") == 90
     assert feeds._parse_duration("05:30") == 330
+
+
+# ---- 以下為稽核抓到的問題的回歸測試 ----
+
+def test_bad_dates_never_crash():
+    """1970 前/無時區的日期在 Windows 會讓 .timestamp() 拋 OSError,
+    絕不能讓整個 feed 掛掉。"""
+    for raw in ("Thu, 01 Jan 1960 00:00:00 -0000",
+                "Mon, 01 Jan 1900 00:00:00 GMT",
+                "Fri, 31 Dec 9999 23:59:59 +0000",
+                "not a date", "", None):
+        feeds._parse_date(raw)  # 不該拋例外
+    # 無時區資訊要當 UTC,不能用本機時區
+    utc = feeds._parse_date("Wed, 01 Jan 2020 00:00:00 -0000")
+    assert utc == 1577836800.0
+
+
+def test_one_bad_item_does_not_kill_feed():
+    """單一條目異常時,其他集數仍要正常解析。"""
+    bad = RSS.replace("<pubDate>Thu, 23 Jul 2026 08:00:00 +0800</pubDate>",
+                      "<pubDate>Mon, 01 Jan 1900 00:00:00 GMT</pubDate>")
+    _, eps = feeds.parse_feed(bad)
+    assert len(eps) == 2
+    assert eps[0].title.startswith("第 2 集")
+
+
+def test_video_platforms_never_routed_to_feeds():
+    """影音平台一律交給 yt-dlp,即使網址含 feed/rss 字樣。"""
+    assert not feeds.looks_like_feed(
+        "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc")
+    assert not feeds.looks_like_feed("https://www.twitch.tv/feedme")
+    assert not feeds.looks_like_feed("https://kick.com/feedthebeast")
+    # 真正的 podcast feed 仍要被辨識
+    assert feeds.looks_like_feed("https://feeds.npr.org/510289/podcast.xml")
+    assert feeds.looks_like_feed("https://example.com/rss")
+    assert feeds.looks_like_feed("https://anchor.fm/s/123/podcast/rss")
+    # 只是路徑裡有 rss 字樣的一般網址不該誤判
+    assert not feeds.looks_like_feed("https://example.com/rssingtons/video")
+
+
+def test_bytes_input_honours_declared_encoding():
+    """傳 bytes 時要用 XML 宣告的編碼,不能靠猜(否則非 ASCII 標題會變亂碼)。"""
+    xml = ('<?xml version="1.0" encoding="ISO-8859-1"?>'
+           '<rss version="2.0"><channel><title>Caf\xe9 Podcast</title>'
+           '<item><title>Ep</title><guid>1</guid>'
+           '<enclosure url="https://x/a.mp3" type="audio/mpeg"/>'
+           '</item></channel></rss>').encode("iso-8859-1")
+    title, eps = feeds.parse_feed(xml)
+    assert title == "Café Podcast"
+    assert len(eps) == 1

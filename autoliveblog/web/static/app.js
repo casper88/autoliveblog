@@ -266,13 +266,14 @@ async function loadSubs() {
   const subs = await (await fetch("/api/subscriptions")).json();
   $("subs").innerHTML = subs.map(s => `
     <div class="hist-item" style="cursor:default">
-      <span class="badge ${s.live_now ? "b-red" : "b-blue"} small">
-        ${s.live_now === null ? "檢查中" : s.live_now ? "直播中" : "未開播"}</span>
+      <span class="badge ${s.live_now ? "b-red" : s.is_feed ? "b-green" : "b-blue"} small">
+        ${s.last_error ? "檢查失敗" : s.is_feed ? "Podcast"
+          : s.live_now === null ? "檢查中" : s.live_now ? "直播中" : "未開播"}</span>
       <span class="grow ellip">${esc(s.channel_url)}
         ${(s.keywords || []).length ? `<span class="muted small">⚡ ${esc(s.keywords.join("、"))}</span>` : ""}</span>
       <span class="muted small">${s.last_check
         ? "上次檢查 " + new Date(s.last_check * 1000).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" }) : ""}</span>
-      ${s.live_now ? `<button class="small primary" onclick="goSub('${s.id}')">▶ 開始總結</button>` : ""}
+      ${s.startable ? `<button class="small primary" onclick="goSub('${s.id}')">▶ 開始總結</button>` : ""}
       <button class="small" onclick="toggleSub('${s.id}')">${s.enabled ? "暫停" : "啟用"}</button>
       <button class="small" onclick="delSub('${s.id}')">🗑</button>
     </div>`).join("") || '<p class="muted small">尚無訂閱。新增後每 3 分鐘檢查一次,開播就自動開始總結。</p>';

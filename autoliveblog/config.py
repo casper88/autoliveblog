@@ -39,6 +39,10 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")  # 白名單,逗號分隔
 # 單次任務允許自動花費的 OpenAI 轉錄上限(美元);超過就中止並要求明確同意
 MAX_AUTO_SPEND_USD = float(env("MAX_AUTO_SPEND_USD", "0.25"))
 
+# Podcast 音檔下載上限:enclosure 可能指向無限長的網路電台
+MAX_AUDIO_MB = int(env("MAX_AUDIO_MB", "500"))
+MAX_DOWNLOAD_SECONDS = int(env("MAX_DOWNLOAD_SECONDS", "1800"))
+
 # 訂閱頻道的開播檢查間隔(秒);太密集會增加被 YouTube 限流的風險
 SUB_POLL_SECONDS = int(env("SUB_POLL_SECONDS", "300"))
 

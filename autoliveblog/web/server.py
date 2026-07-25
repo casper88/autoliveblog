@@ -168,27 +168,13 @@ def _recover_jobs():
             print(f"[recover] 恢復失敗:{e}")
 
 
-def _feed_info(feed_url: str) -> dict:
-    """RSS feed → 與 yt-dlp info 相容的字典(最新一集)。"""
-    ep = feeds.latest_episode(feed_url)
-    if not ep:
-        raise RuntimeError(f"這個 feed 沒有可用的音檔集數:{feed_url}")
-    return {
-        "title": ep.title, "uploader": ep.feed_title,
-        "id": re.sub(r"[^\w-]", "", ep.guid)[-24:] or "episode",
-        "duration": ep.duration or 0, "is_live": False,
-        "webpage_url": ep.page_url or feed_url,
-        "_direct_audio_url": ep.audio_url,
-    }
+_feed_info = feeds.feed_info  # 共用實作(CLI 也用同一份)
 
 
 def _run_job(job: Job):
     req = job.req
     try:
-        if feeds.looks_like_feed(req.url):
-            info = _feed_info(req.url)
-        else:
-            info = ytdl.get_info(req.url)
+        info = feeds.get_info_any(req.url)
         job.title = info.get("title", "")
         job.video_id = info.get("id", "")
         job.thumbnail = info.get("thumbnail", "") or ""
@@ -288,10 +274,7 @@ async def job_events(jid: str):
 async def inspect(req: WatchRequest):
     loop = asyncio.get_event_loop()
     try:
-        if feeds.looks_like_feed(req.url):
-            info = await loop.run_in_executor(None, _feed_info, req.url)
-        else:
-            info = await loop.run_in_executor(None, ytdl.get_info, req.url)
+        info = await loop.run_in_executor(None, feeds.get_info_any, req.url)
     except Exception as e:
         raise HTTPException(400, f"無法讀取網址:{e}")
     return {
@@ -372,19 +355,28 @@ def _load_subs():
             pass
 
 
+_RUNTIME_SUB_FIELDS = ("last_check", "live_now", "live_title", "startable",
+                       "last_error", "is_feed")
+
+
 def _save_subs():
-    """只在設定真正變更時呼叫;寫檔前保留 .bak 備份以防覆寫事故。"""
+    """只在設定真正變更時呼叫。先寫暫存檔再原子替換:
+    直接覆寫或先搬走原檔,中途失敗會讓 subscriptions.json 消失。"""
+    # 執行期狀態不落地(高頻寫檔曾造成訂閱被覆寫遺失)
+    persist = {k: {kk: vv for kk, vv in v.items()
+                   if kk not in _RUNTIME_SUB_FIELDS}
+               for k, v in SUBS.items()}
+    data = json.dumps(persist, ensure_ascii=False, indent=1)
+    tmp = SUBS_FILE.with_suffix(".json.tmp")
     try:
+        tmp.write_text(data, encoding="utf-8")
         if SUBS_FILE.exists():
             SUBS_FILE.replace(SUBS_FILE.with_suffix(".json.bak"))
-    except OSError:
-        pass
-    # last_check / live_now 是執行期狀態,不落地(高頻寫檔曾造成訂閱被覆寫遺失)
-    persist = {k: {kk: vv for kk, vv in v.items()
-                   if kk not in ("last_check", "live_now")}
-               for k, v in SUBS.items()}
-    SUBS_FILE.write_text(json.dumps(persist, ensure_ascii=False, indent=1),
-                         encoding="utf-8")
+        tmp.replace(SUBS_FILE)
+    except OSError as e:
+        # 寫檔失敗不能吞掉:呼叫端還要繼續發通知
+        print(f"[subs] 儲存訂閱失敗:{e}")
+        tmp.unlink(missing_ok=True)
 
 
 class SubRequest(BaseModel):
@@ -420,21 +412,42 @@ def _poll_subs_once():
                 info = ytdl.get_info(_live_url_of(s["channel_url"]))
                 vid = info.get("id", "")
                 is_live = bool(info.get("is_live"))
-        except Exception:
+        except Exception as e:
             vid, is_live = "", False
+            msg = str(e)[:120]
+            # 「還沒開播」是正常狀態,不是錯誤;真正的錯誤才記錄,
+            # 否則靜默失敗會讓「訂閱壞掉」和「還沒開播」長得一模一樣
+            benign = ("not currently live" in msg or "未開播" in msg
+                      or "UserNotLive" in msg)
+            with _SUBS_LOCK:
+                if sid in SUBS:
+                    if benign:
+                        SUBS[sid].pop("last_error", None)
+                    else:
+                        if SUBS[sid].get("last_error") != msg:
+                            print(f"[subs] {s['channel_url']} 檢查失敗:{msg}")
+                        SUBS[sid]["last_error"] = msg
         with _SUBS_LOCK:
             if sid not in SUBS:
                 continue
+            if is_live or vid:
+                SUBS[sid].pop("last_error", None)
             SUBS[sid]["last_check"] = time.time()
             SUBS[sid]["is_feed"] = is_feed
             # feed 沒有「正在直播」的概念,只有新集數;不要讓清單一直顯示直播中
             SUBS[sid]["live_now"] = False if is_feed else is_live
             SUBS[sid]["live_title"] = (info.get("title") or "") if is_live else ""
+            # 有可開始的內容嗎?直播看 live_now,podcast 看有沒有抓到集數。
+            # 兩個清單的「開始」按鈕都以此為準,否則 podcast 訂閱永遠按不了。
+            SUBS[sid]["startable"] = bool(vid) if is_feed else bool(is_live)
             if is_live and vid and vid != SUBS[sid].get("last_started"):
                 # 只記錄+通知,不自動開始;使用者按按鈕才啟動
                 first_seen = not SUBS[sid].get("last_started")
                 SUBS[sid]["last_started"] = vid
-                _save_subs()  # 只有 last_started 變更才寫檔
+                try:
+                    _save_subs()  # 只有 last_started 變更才寫檔
+                except Exception as e:
+                    print(f"[subs] 儲存失敗但仍會通知:{e}")
                 ch = (info.get("uploader") if is_feed else None) or \
                     SUBS[sid]["channel_url"].rstrip("/").rsplit("/", 1)[-1]
                 title = (info.get("title") or "")[:80]

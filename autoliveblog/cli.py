@@ -2,7 +2,7 @@
 import argparse
 import sys
 
-from . import config, live, vod, ytdl
+from . import config, feeds, live, vod, ytdl
 
 
 def _force_utf8_console() -> None:
@@ -50,7 +50,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print("讀取影片資訊中…")
     try:
-        info = ytdl.get_info(args.url, args.cookies_from_browser)
+        # feed 網址走 RSS 解析,其餘交給 yt-dlp
+        info = feeds.get_info_any(args.url, args.cookies_from_browser)
     except Exception as e:
         print(f"無法讀取網址:{e}")
         return 1
