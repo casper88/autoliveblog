@@ -130,16 +130,16 @@ function renderJob(j) {
     : j.status === "done" ? "b-green" : j.is_live ? "b-red" : "b-blue");
   el.querySelector("b.ellip").textContent = j.title || j.url;
   const pb = el.querySelector(".play-btn");
-  pb.style.display = j.video_id ? "" : "none";
-  pb.onclick = () => playInline(j.video_id);
+  pb.style.display = j.embed_url ? "" : "none";
+  pb.onclick = () => playInline(j.embed_url);
   if (j.current_topic) $("topic-" + j.id).textContent = j.current_topic;
   $("n-" + j.id).textContent = j.timeline.length;
   $("sm-" + j.id).textContent = j.smart_hits;
   $("roll-" + j.id).textContent = j.rolling_summary || "(尚無)";
   const tl = $("tl-" + j.id);
   tl.innerHTML = j.timeline.slice().reverse().map(t => `
-    <div><div>${j.video_id && t.seconds != null
-      ? `<a href="https://www.youtube.com/watch?v=${esc(j.video_id)}&t=${Math.floor(t.seconds)}s" target="_blank"><b class="small">${esc(t.elapsed)}</b></a>`
+    <div><div>${t.watch_url
+      ? `<a href="${esc(t.watch_url)}" target="_blank"><b class="small">${esc(t.elapsed)}</b></a>`
       : `<b class="small">${esc(t.elapsed)}</b>`} · ${esc(t.topic)}
       ${t.smart ? '<span class="badge b-blue small">🔍 補看</span>' : ""}</div>
       ${(t.points || []).map(p => `<p class="pt">- ${esc(p)}</p>`).join("")}
@@ -186,13 +186,13 @@ function subscribe(id) {
 }
 
 // ---------- 內嵌播放器 ----------
-window.playInline = (vid) => {
-  if (!vid) return;
+window.playInline = (embedUrl) => {
+  if (!embedUrl) return;
   const box = $("player-box");
   box.style.display = "block";
   box.innerHTML = `<div class="row" style="justify-content:flex-end;margin-bottom:4px">
     <button class="small" onclick="$('player-box').style.display='none';$('player-box').querySelector('iframe')?.remove()">✕ 關閉播放器</button></div>
-    <iframe src="https://www.youtube.com/embed/${vid}?autoplay=1" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
+    <iframe src="${esc(embedUrl)}" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
 };
 
 // ---------- 歷史紀錄 ----------
@@ -206,7 +206,7 @@ function renderHistory() {
   $("history").innerHTML = histCache
     .filter(h => !q || h.title.includes(q) || (h.channel || "").includes(q))
     .map(h => `
-    <div class="hist-item" onclick="openHist('${esc(h.name)}', '${esc(h.url)}')">
+    <div class="hist-item" onclick="openHist('${esc(h.name)}', '${esc(h.watch_base || '')}', '${esc(h.seek_tpl || '')}')">
       <span class="badge ${h.is_live ? "b-red" : "b-blue"} small">${h.is_live ? "直播" : "影片"}</span>
       ${h.channel ? `<span class="badge b-green small">${esc(h.channel)}</span>` : ""}
       <span class="grow ellip">${esc(h.title)}</span>
@@ -217,14 +217,13 @@ function renderHistory() {
 $("hist-search").oninput = renderHistory;
 $("hist-refresh").onclick = loadHistory;
 
-window.openHist = async (name, url) => {
+window.openHist = async (name, watchBase, seekTpl) => {
   const { content } = await (await fetch("/api/history/" + encodeURIComponent(name))).json();
   let html = marked.parse(content);
-  const vid = (url.match(/[?&]v=([\w-]{6,})/) || [])[1];
-  if (vid) {
+  if (watchBase && seekTpl) {
     html = html.replace(/\[(\d+):(\d{2})(?::(\d{2}))?\]/g, (m, a, b, c) => {
       const secs = c ? (+a) * 3600 + (+b) * 60 + (+c) : (+a) * 60 + (+b);
-      return `<a href="https://www.youtube.com/watch?v=${vid}&t=${secs}s" target="_blank">${m}</a>`;
+      return `<a href="${watchBase}${seekTpl.replace("{seconds}", secs)}" target="_blank">${m}</a>`;
     });
   }
   const v = $("viewer");

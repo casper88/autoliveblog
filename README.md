@@ -33,7 +33,7 @@ Every push carries inline buttons, so you never have to remember which job to ch
 - **Web UI** — job cards with live timeline, embedded player, history browser, usage and cost meter
 - **Self-healing** — login autostart, health-check watchdog, auto-restart with job recovery, weekly yt-dlp auto-update
 
-Works with any site yt-dlp supports (YouTube, Twitch, and more). Windows-first launchers; the Python core is cross-platform.
+**Platforms.** The capture pipeline runs on yt-dlp, so any site it supports can be summarized. Platform-specific behaviour (go-live checks, timestamp deep links, the embedded player) lives in `autoliveblog/platforms.py`; YouTube is fully wired, Twitch and Kick are configured, and anything else falls back to a generic adapter that still summarizes but skips deep links. Adding a platform is one entry in that table. Windows-first launchers; the Python core is cross-platform.
 
 ## Install
 

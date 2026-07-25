@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from .. import config, live, stats, vod, ytdl
+from .. import config, live, platforms, stats, vod, ytdl
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -110,15 +110,23 @@ class Job:
 
     def snapshot(self) -> dict:
         with self.lock:
+            plat = platforms.detect(self.req.url)
+            timeline = [
+                dict(t, watch_url=platforms.watch_url(
+                    plat, self.video_id, t.get("seconds")))
+                for t in self.timeline
+            ]
             return {
                 "id": self.id, "url": self.req.url, "status": self.status,
                 "error": self.error, "title": self.title,
                 "video_id": self.video_id, "thumbnail": self.thumbnail,
                 "is_live": self.is_live, "md_path": self.md_path,
+                "platform": plat.key, "platform_label": plat.label,
+                "embed_url": platforms.embed_url(plat, self.video_id),
                 "current_topic": self.current_topic,
                 "rolling_summary": self.rolling_summary,
                 "final_summary": self.final_summary,
-                "timeline": self.timeline, "smart_hits": self.smart_hits,
+                "timeline": timeline, "smart_hits": self.smart_hits,
                 "keywords": self.keywords, "created": self.created,
                 "chunk_seconds": self.chunk_seconds,
                 "event_count": len(self.events),
@@ -300,13 +308,18 @@ def history():
             head = p.read_text(encoding="utf-8", errors="replace")[:600]
             m = _TITLE_RE.search(head)
             mu = _URL_RE.search(head)
+            src_url = mu.group(1) if mu else ""
+            # 檔名尾端是影片 ID:<標題>_<id>.md;用它算出可跳轉的觀看網址
+            vid = p.stem.rsplit("_", 1)[-1] if "_" in p.stem else ""
             out.append({
                 "name": str(rel).replace("\\", "/"),
                 "channel": rel.parts[0] if len(rel.parts) > 1 else "",
                 "title": (m.group(1).strip() if m else p.stem)[:120],
                 "is_live": p.name.startswith("live_"),
                 "mtime": p.stat().st_mtime,
-                "url": mu.group(1) if mu else "",
+                "url": src_url,
+                "watch_base": platforms.watch_url(src_url, vid) if src_url else "",
+                "seek_tpl": platforms.detect(src_url).seek_param_template or "",
             })
     return out
 
@@ -362,13 +375,13 @@ class SubRequest(BaseModel):
 
 
 def _clean_channel_url(channel_url: str) -> str:
-    """去掉 ?si= 等追蹤參數與尾斜線(髒參數會讓 /live 拼接壞掉)。"""
-    return channel_url.split("?")[0].split("#")[0].rstrip("/")
+    """去掉 ?si= 等追蹤參數與尾斜線(髒參數會讓網址拼接壞掉)。"""
+    return platforms.clean_url(channel_url)
 
 
 def _live_url_of(channel_url: str) -> str:
-    u = _clean_channel_url(channel_url)
-    return u if u.endswith("/live") else u + "/live"
+    """頻道網址 → 開播檢查網址(依平台規則,見 platforms.py)。"""
+    return platforms.live_url_of(channel_url)
 
 
 def _poll_subs_once():
