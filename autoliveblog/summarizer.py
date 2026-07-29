@@ -26,6 +26,17 @@ def _audio_duration(path: Path) -> float:
         return 0.0
 
 
+def _transcript_span(transcript: str) -> float:
+    """從逐字稿最後一個 [時:分:秒] 標記推算內容總長(秒);沒有標記回傳 0。"""
+    import re
+    marks = re.findall(r"\[(\d+):(\d{2})(?::(\d{2}))?\]", transcript)
+    if not marks:
+        return 0.0
+    h, m, s = marks[-1]
+    return (int(h) * 3600 + int(m) * 60 + int(s)) if s \
+        else (int(h) * 60 + int(m))
+
+
 def _parse_seconds_list(raw, limit: int) -> list[int]:
     """把模型回傳的 need_frames 轉成秒數列表(容忍 "1:30" 這類格式)。"""
     out: list[int] = []
@@ -77,7 +88,8 @@ class GeminiSummarizer:
     def summarize_text(self, title: str, channel: str, transcript: str) -> str:
         if len(transcript) > config.MAX_TRANSCRIPT_CHARS:
             return self._summarize_long_text(title, channel, transcript)
-        prompt = self._vod_prompt(title, channel) + "\n\n=== 逐字稿 ===\n" + transcript
+        prompt = (self._vod_prompt(title, channel, _transcript_span(transcript))
+                  + "\n\n=== 逐字稿 ===\n" + transcript)
         return self._generate([prompt])
 
     def _summarize_long_text(self, title: str, channel: str, transcript: str) -> str:
@@ -98,10 +110,12 @@ class GeminiSummarizer:
 
     def summarize_audio(self, path: Path, title: str, channel: str) -> str:
         dur = _audio_duration(path)
-        if dur and dur > 2700:  # 超過 45 分鐘:分段 map-reduce(避開單次 token 上限)
+        # 超過 20 分鐘就分段:單次整檔時模型容易「只詳述開頭」,分段能保證後段也被讀到
+        if dur and dur > 1200:
             return self._summarize_long_audio(path, title, channel, dur)
         audio_part = self._audio_part(path)
-        prompt = self._vod_prompt(title, channel) + "\n請直接聆聽這段音訊後進行總結。"
+        prompt = (self._vod_prompt(title, channel, dur)
+                  + "\n請完整聆聽這段音訊(從頭到尾)後進行總結。")
         return self._generate([audio_part, prompt])
 
     def _summarize_long_audio(self, path: Path, title: str, channel: str,
@@ -121,10 +135,14 @@ class GeminiSummarizer:
         partials: list[str] = []
         for i, seg in enumerate(segs):
             t0, t1 = i * seg_len, min((i + 1) * seg_len, int(dur))
-            label = f"{t0 // 3600}:{t0 % 3600 // 60:02d} ~ {t1 // 3600}:{t1 % 3600 // 60:02d}"
+            # 用「第 N 分鐘」描述,避免 0:30 被誤讀成 30 秒
+            label = f"第 {t0 // 60}~{t1 // 60} 分鐘"
             prompt = (f"這是「{title}」的第 {i + 1}/{n} 段音訊,"
-                      f"對應整場的 {label}。請用{self.lang}聆聽後整理這一段的"
-                      f"具體重點(人名、數字、結論),時間點請以整場時間標示。")
+                      f"對應整場的{label}(整場共 {int(dur) // 60} 分鐘)。"
+                      f"請用{self.lang}聆聽後整理這一段的具體重點"
+                      f"(人名、數字、結論),條列 4~8 條。"
+                      f"時間點請用「整場的第幾分鐘」表示,"
+                      f"例如「第 {t0 // 60 + 5} 分鐘」,不要用 0:05 這種格式。")
             try:
                 part = types.Part.from_bytes(data=seg.read_bytes(),
                                              mime_type="audio/mpeg")
@@ -134,9 +152,13 @@ class GeminiSummarizer:
                 partials.append(f"【{label}】(此段總結失敗:{str(e)[:80]})")
                 print(f"  長音訊分段 {i + 1}/{n} 失敗:{e}")
         merged = "\n\n".join(partials)
-        prompt = (self._vod_prompt(title, channel)
-                  + "\n\n以下是各時段的重點整理,請彙整成一份完整總結"
-                    "(保留關鍵時間點):\n\n" + merged)
+        prompt = (self._vod_prompt(title, channel, dur)
+                  + f"\n\n以下是這集({int(dur) // 60} 分鐘)各時段的重點整理。"
+                    f"請彙整成一份完整總結,規則:\n"
+                    f"- 內容大綱**每個時段至少 2 條**,依時間順序涵蓋全部 {n} 個時段,"
+                    f"最後一條要對應到節目尾聲(約第 {int(dur) // 60} 分鐘)\n"
+                    f"- 時間標記寫「第 N 分鐘」,不要寫成 0:05 這種會被誤讀成秒的格式\n"
+                    f"- 關鍵重點要平均取材於各時段,不可只寫開頭那一段\n\n" + merged)
         return self._generate([prompt])
 
     # ---------- 直播:滾動式更新 ----------
@@ -247,15 +269,24 @@ class GeminiSummarizer:
 
     # ---------- 內部 ----------
 
-    def _vod_prompt(self, title: str, channel: str) -> str:
-        return f"""請用{self.lang}總結這部影片/Podcast。{self._gloss_note()}
+    def _vod_prompt(self, title: str, channel: str,
+                    duration: float | None = None) -> str:
+        # 一定要告知總長並要求涵蓋全程:否則模型常只詳述開頭幾分鐘就收尾
+        span = ""
+        if duration and duration > 60:
+            mins = int(duration // 60)
+            span = (f"\n這部內容全長約 {mins} 分鐘。**務必涵蓋從頭到尾的完整內容**,"
+                    f"大綱要一路列到最後(約第 {mins} 分鐘),不可只總結開頭。"
+                    f"時間標記一律寫「第 N 分鐘」(例如「第 35 分鐘」),"
+                    f"不要用 0:35 這種容易被誤讀成秒數的格式。")
+        return f"""請用{self.lang}總結這部影片/Podcast。{self._gloss_note()}{span}
 標題:{title}
 頻道:{channel}
 
 輸出格式(Markdown):
 ## 一句話總結
 ## 內容大綱
-(依時間順序列出主要段落,若有時間標記請附上)
+(依時間順序列出主要段落,平均分布於整段內容,每段附上時間標記)
 ## 關鍵重點
 (具體重點:提到的人名、數據、結論、建議,條列)
 ## 值得深入的地方

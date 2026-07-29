@@ -135,7 +135,9 @@ class OpenAISummarizer:
                 partials.append(self._chat([{"role": "user", "content": p}]))
             transcript = "\n\n".join(
                 f"【第 {i} 段重點】\n{s}" for i, s in enumerate(partials, 1))
-        prompt = self._vod_prompt(title, channel) + "\n\n=== 逐字稿 ===\n" + transcript
+        from .summarizer import _transcript_span
+        prompt = (self._vod_prompt(title, channel, _transcript_span(transcript))
+                  + "\n\n=== 逐字稿 ===\n" + transcript)
         return self._chat([{"role": "user", "content": prompt}])
 
     def summarize_audio(self, path: Path, title: str, channel: str) -> str:
@@ -278,8 +280,15 @@ class OpenAISummarizer:
         return self._chat([{"role": "user", "content": text}],
                           json_mode=json_mode, retries=retries)
 
-    def _vod_prompt(self, title: str, channel: str) -> str:
-        return f"""請用{self.lang}總結這部影片/Podcast。{self._gloss_note()}
+    def _vod_prompt(self, title: str, channel: str,
+                    duration: float | None = None) -> str:
+        span = ""
+        if duration and duration > 60:
+            mins = int(duration // 60)
+            span = (f"\n這部內容全長約 {mins} 分鐘。**務必涵蓋從頭到尾的完整內容**,"
+                    f"大綱要一路列到最後(約第 {mins} 分鐘),不可只總結開頭。"
+                    f"時間標記寫「第 N 分鐘」,不要用 0:35 這種會被誤讀成秒的格式。")
+        return f"""請用{self.lang}總結這部影片/Podcast。{self._gloss_note()}{span}
 標題:{title}
 頻道:{channel}
 
