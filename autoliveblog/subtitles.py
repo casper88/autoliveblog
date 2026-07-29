@@ -40,8 +40,10 @@ def parse_vtt(path: Path) -> list[tuple[float, str]]:
             h, mnt, s, ms = (int(x) for x in m.groups())
             start = h * 3600 + mnt * 60 + s + ms / 1000
             continue
-        if not line or line == "WEBVTT" or line.startswith(("NOTE", "Kind:", "Language:", "STYLE")):
+        if not line:
             continue
+        # 標頭與 cue 之間的中繼資料(WEBVTT/NOTE/STYLE/Kind:/cue 編號)一律略過。
+        # 這個判斷必須限定在 cue 之外:否則講者說的話只要以 NOTE 開頭就會被吃掉。
         if start is None:
             continue
         text = _TAG.sub("", line).strip()

@@ -94,6 +94,43 @@ def test_transcript_span_reads_last_timestamp():
     assert _transcript_span("沒有時間標記") == 0.0
 
 
+def test_subtitle_body_starting_with_note_is_kept(tmp_path):
+    """標頭過濾器只能作用在 cue 之外:講者說的話以 NOTE 開頭時不該被吃掉。"""
+    vtt = ("WEBVTT\nKind: captions\n\n"
+           "00:00:01.000 --> 00:00:03.000\n"
+           "NOTE this number matters\n\n"
+           "00:00:03.000 --> 00:00:05.000\n"
+           "Language: is not a header here\n")
+    p = tmp_path / "t.vtt"
+    p.write_text(vtt, encoding="utf-8")
+    joined = " ".join(t for _, t in parse_vtt(p))
+    assert "NOTE this number matters" in joined
+    assert "Language: is not a header here" in joined
+
+
+def test_subtitle_track_priority_prefers_original(monkeypatch):
+    """原文軌優先於機翻軌:否則英文影片會被抓成機翻中文,內容先被翻壞一次。"""
+    from autoliveblog.ytdl import SUB_LANGS
+
+    def pick(manual: set[str], auto: set[str]) -> list[str]:
+        available = manual | auto
+
+        def prefer(pool):
+            head = [l for l in SUB_LANGS if l in pool]
+            return head + sorted(pool - set(head))
+        orig = sorted(k for k in available if k.endswith("-orig"))
+        cand = orig + prefer(manual - set(orig)) + prefer(auto - set(orig))
+        seen: set[str] = set()
+        return [c for c in cand if not (c in seen or seen.add(c))]
+
+    # 英文影片 + YouTube 自動產生的一堆機翻軌 → 必須挑原文軌
+    assert pick(set(), {"en-orig", "zh-Hant", "zh-Hans", "en", "ja"})[0] == "en-orig"
+    # 有人工上傳字幕時,人工優先於機翻
+    assert pick({"en"}, {"zh-Hant", "zh-TW"})[0] == "en"
+    # 中文影片仍照偏好語言挑
+    assert pick({"zh-TW", "en"}, set())[0] == "zh-TW"
+
+
 def test_glossary_matching(tmp_path, monkeypatch):
     monkeypatch.setattr(glossary, "FILE", tmp_path / "g.json")
     glossary.add_terms("財經頻道", ["樺漢(6414)"])

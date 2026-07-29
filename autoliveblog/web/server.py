@@ -99,13 +99,19 @@ class Job:
                 pass
 
     def _keyword_hits(self, e: dict) -> list[str]:
+        """字面 + 語意命中。大小寫不敏感:設 nvidia 也要能命中 Nvidia/NVIDIA。"""
         if not self.keywords:
             return []
-        text = (e.get("topic") or "") + " " + " ".join(e.get("points") or [])
-        literal = [k for k in self.keywords if k in text]
-        # 模型判定的語意命中(不必字面出現)
-        semantic = [t for t in (e.get("topic_hits") or [])
-                    if t in self.keywords and t not in literal]
+        text = ((e.get("topic") or "") + " "
+                + " ".join(e.get("points") or [])).casefold()
+        literal = [k for k in self.keywords if k.casefold() in text]
+        # 模型判定的語意命中(不必字面出現);回傳使用者原本的拼寫
+        folded = {k.casefold(): k for k in self.keywords}
+        semantic = []
+        for t in (e.get("topic_hits") or []):
+            k = folded.get(str(t).casefold())
+            if k and k not in literal:
+                semantic.append(k)
         return literal + semantic
 
     def snapshot(self) -> dict:

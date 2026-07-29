@@ -13,7 +13,12 @@ from . import config, stats
 def _audio_duration(path: Path) -> float:
     """用 ffprobe 取得音訊長度(秒);失敗回傳 0。"""
     import subprocess
-    ffprobe = Path(config.FFMPEG).parent / "ffprobe.exe" if config.FFMPEG else None
+    ffprobe = None
+    if config.FFMPEG:
+        # 跟著 ffmpeg 的檔名慣例:Windows 有 .exe,其他平台沒有。
+        # 寫死 .exe 會讓非 Windows 永遠取不到時長,長音訊分段與涵蓋要求就失效。
+        ff = Path(config.FFMPEG)
+        ffprobe = ff.with_name("ffprobe" + ff.suffix)
     if not ffprobe or not ffprobe.exists():
         return 0.0
     try:
@@ -139,6 +144,7 @@ class GeminiSummarizer:
         segs = sorted(seg_dir.glob("seg_*.mp3"))
         n = len(segs)
         partials: list[str] = []
+        failed: list[str] = []
         for i, seg in enumerate(segs):
             t0, t1 = i * seg_len, min((i + 1) * seg_len, int(dur))
             # 零填充 HH:MM:SS:不會被誤讀成分:秒,也與網頁跳轉連結的格式一致
@@ -155,16 +161,27 @@ class GeminiSummarizer:
                 partials.append(f"【{label}】\n" + self._generate([part, prompt]))
                 print(f"  長音訊分段 {i + 1}/{n} 完成")
             except Exception as e:
-                partials.append(f"【{label}】(此段總結失敗:{str(e)[:80]})")
+                # 失敗的段落不能留下佔位文字:彙整提示詞要求「涵蓋每個時段」,
+                # 模型會替這些空洞編出帶正確時間戳的假內容
+                failed.append(label)
                 print(f"  長音訊分段 {i + 1}/{n} 失敗:{e}")
+        if not partials:
+            raise RuntimeError(f"長音訊的 {n} 段全部總結失敗,無法產出報告")
         merged = "\n\n".join(partials)
+        gap_note = ""
+        if failed:
+            gap_note = (f"- 以下時段無法取得內容:{'、'.join(failed)}。"
+                        f"這些時段**不要出現在大綱裡**,也不可臆測內容;"
+                        f"請在總結末尾註明「以下時段未能解析」並列出\n")
         prompt = (self._vod_prompt(title, channel, dur)
                   + f"\n\n以下是這集(全長 {_hms(dur)})各時段的重點整理。"
                     f"請彙整成一份完整總結,規則:\n"
-                    f"- 內容大綱**每個時段至少 2 條**,依時間順序涵蓋全部 {n} 個時段,"
-                    f"最後一條要對應到節目尾聲(接近 {_hms(dur)})\n"
+                    f"- 內容大綱**每個時段至少 2 條**,依時間順序涵蓋下方全部 "
+                    f"{len(partials)} 個時段,最後一條要對應到最後一個時段的結尾\n"
                     f"- 每條大綱開頭標上 [HH:MM:SS] 零填充時間,例如 [00:35:00]\n"
-                    f"- 關鍵重點要平均取材於各時段,不可只寫開頭那一段\n\n" + merged)
+                    f"- 關鍵重點要平均取材於各時段,不可只寫開頭那一段\n"
+                    f"- **只根據下方提供的內容撰寫,沒有提到的絕不臆測**\n"
+                    + gap_note + "\n" + merged)
         return self._generate([prompt])
 
     # ---------- 直播:滾動式更新 ----------

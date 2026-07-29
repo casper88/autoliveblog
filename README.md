@@ -8,13 +8,15 @@ AI livestream and video summarizer for YouTube — real-time rolling summaries w
 
 [繁體中文說明](README.zh-TW.md)
 
-![autoliveblog web UI — live watch of Al Jazeera English with rolling topic summary](docs/screenshot-web.png)
+> **Language note.** The web UI, the Telegram bot and the CLI are Traditional Chinese only — there is no localization layer. Summaries follow `AUTOLIVEBLOG_LANG` (default Traditional Chinese) and the pipeline handles source audio in any language, but the interface you drive it with is Chinese.
+
+![autoliveblog web UI (Traditional Chinese) — live watch of Al Jazeera English with a rolling topic summary](docs/screenshot-web.png)
 
 ## What it does
 
 Point it at a YouTube live stream and it watches for you: every few minutes it listens to the audio, tracks topic changes, and pushes updates to Telegram. When the host refers to something on screen ("look at this chart"), the model itself requests screenshots of that moment and reads the on-screen numbers. Missed the start? One tap catches up from the beginning of the stream, then continues live. When the stream ends, you get a full report.
 
-<img src="docs/screenshot-telegram.png" width="380" alt="Telegram bot pushing a live topic update with inline action buttons">
+<img src="docs/screenshot-telegram.png" width="380" alt="Telegram bot (Traditional Chinese) pushing a live topic update with inline action buttons">
 
 Every push carries inline buttons, so you never have to remember which job to check or stop.
 

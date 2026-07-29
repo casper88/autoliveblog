@@ -88,8 +88,10 @@ class OpenAISummarizer:
         kwargs = {}
         if config.STT_LANG:  # 未設定則自動偵測語言(硬編 zh 會毀掉外語內容)
             kwargs["language"] = config.STT_LANG
-        if self.glossary:  # 詞彙偏置:提高專有名詞辨識正確率
-            kwargs["prompt"] = "可能出現的專有名詞:" + "、".join(self.glossary[:20])
+        if self.glossary:
+            # 詞彙偏置:只餵詞彙本身,不加說明句 —— Whisper 會跟著提示的語言走,
+            # 中文說明句會讓外語音訊被轉成中文
+            kwargs["prompt"] = ", ".join(self.glossary[:20])
         resp = self.client.audio.transcriptions.create(
             model=self.stt_model, file=f, **kwargs)
         # 轉錄計費以音長估算;呼叫端沒給就用 48kbps mp3 反推
@@ -110,7 +112,8 @@ class OpenAISummarizer:
         segments, _ = OpenAISummarizer._local_model.transcribe(
             io.BytesIO(audio_bytes),
             language=(config.STT_LANG or None), beam_size=1, vad_filter=True,
-            initial_prompt=("、".join(self.glossary[:20])
+            # 只餵詞彙,不加中文連接號:提示的語言會影響轉錄輸出的語言
+            initial_prompt=(", ".join(self.glossary[:20])
                             if self.glossary else None))
         return "".join(s.text for s in segments).strip()
 
@@ -157,10 +160,11 @@ class OpenAISummarizer:
                     f"若確定要花,請設 AUTOLIVEBLOG_MAX_AUTO_SPEND_USD 提高上限,"
                     f"或設 AUTOLIVEBLOG_STT_PROVIDER=local 用本地免費轉錄。")
         transcript = self._transcribe_file(path)
-        # 付費轉錄的逐字稿永久保存,避免重複花費;檔名帶節目與標題才不會互相覆寫
+        # 付費轉錄的逐字稿永久保存,避免重複花費。檔名帶節目、標題與音檔名:
+        # 只用標題會在長標題被截斷時碰撞,把先前付費買到的逐字稿蓋掉
         tdir = config.OUTPUT_DIR / "transcripts"
         tdir.mkdir(parents=True, exist_ok=True)
-        stem = _safe_stem(f"{channel}_{title}") or path.stem
+        stem = f"{_safe_stem(f'{channel}_{title}', 70)}_{path.stem}".strip("_")
         (tdir / f"{stem}.txt").write_text(transcript, encoding="utf-8")
         return self.summarize_text(title, channel, transcript)
 
@@ -170,16 +174,20 @@ class OpenAISummarizer:
             return self.transcribe(path.read_bytes(), path.name)
         if not config.FFMPEG:
             raise RuntimeError("音訊超過 24MB 需要 ffmpeg 切段轉錄")
+        from .summarizer import _hms
+        seg_seconds = 900
         seg_dir = path.parent / "stt_segments"
         seg_dir.mkdir(exist_ok=True)
         subprocess.run([
             config.FFMPEG, "-hide_banner", "-loglevel", "error", "-i", str(path),
             "-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "48k",
-            "-f", "segment", "-segment_time", "900",
+            "-f", "segment", "-segment_time", str(seg_seconds),
             str(seg_dir / "seg_%03d.mp3")], check=True)
         texts = []
         for i, seg in enumerate(sorted(seg_dir.glob("seg_*.mp3"))):
-            texts.append(f"[第 {i * 15} 分鐘起]\n" +
+            # 時間標記要和總結用的 [HH:MM:SS] 一致:_transcript_span 靠它推算總長,
+            # 用中文寫會讓它回傳 0,涵蓋全程的要求就悄悄失效
+            texts.append(f"[{_hms(i * seg_seconds)}]\n" +
                          self.transcribe(seg.read_bytes(), seg.name))
         return "\n\n".join(texts)
 

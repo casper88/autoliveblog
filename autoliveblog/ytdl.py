@@ -49,20 +49,28 @@ def download_subtitles(url: str, out_dir: Path,
                        cookies_from_browser: str | None = None) -> Path | None:
     """下載官方或自動字幕(vtt),回傳檔案路徑;沒有字幕回傳 None。
 
-    逐語言個別嘗試:翻譯字幕軌常被 YouTube 429 限流,一條失敗不能毀掉全部;
-    並把「影片原文軌」排在翻譯軌之前(原文端點較不受限、品質也較好)。"""
+    挑選順序:影片原文軌 → 人工上傳字幕 → 自動(機翻)字幕。
+    這個順序很重要:YouTube 為每支影片產生 150+ 個機翻軌,若照偏好語言排序,
+    英文影片會被抓成機翻中文軌,內容先被機器翻譯糟蹋一次才送進模型。
+    另外逐語言個別嘗試:機翻軌常被 429 限流,一條失敗不能毀掉全部。"""
     out_dir.mkdir(parents=True, exist_ok=True)
     info = get_info(url, cookies_from_browser)
     vid = info.get("id", "")
-    available = set(info.get("subtitles") or {}) | \
-        set(info.get("automatic_captions") or {})
-    available.discard("live_chat")
-    orig = [k for k in available if k.endswith("-orig")]
-    candidates = [l for l in SUB_LANGS if l in available] + orig
-    # SUB_LANGS 都沒有時,退而求其次拿任何可用的原文軌/英文
-    if not candidates:
-        candidates = orig or (["en"] if "en" in available else
-                              sorted(available)[:1])
+    manual = set(info.get("subtitles") or {}) - {"live_chat"}
+    auto = set(info.get("automatic_captions") or {}) - {"live_chat"}
+    available = manual | auto
+
+    def prefer(pool: set[str]) -> list[str]:
+        """池內先照偏好語言排,其餘依字母序墊底。"""
+        head = [l for l in SUB_LANGS if l in pool]
+        return head + sorted(pool - set(head))
+
+    # -orig 是影片原本的語言軌(非翻譯),永遠優先
+    orig = sorted(k for k in available if k.endswith("-orig"))
+    candidates = orig + prefer(manual - set(orig)) + prefer(auto - set(orig))
+    # 去重但保留順序
+    seen: set[str] = set()
+    candidates = [c for c in candidates if not (c in seen or seen.add(c))]
     for lang in candidates:
         opts = _base_opts(cookies_from_browser) | {
             "skip_download": True,
