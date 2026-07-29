@@ -1,4 +1,5 @@
 """核心純函式的單元測試:字幕解析、秒數解析、辭典、工具函式、費用計算。"""
+import re
 import sys
 from pathlib import Path
 
@@ -9,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from autoliveblog import glossary, stats
 from autoliveblog.live import _fmt_elapsed, _safe_name
 from autoliveblog.subtitles import parse_vtt, to_transcript
-from autoliveblog.summarizer import _parse_seconds_list
+from autoliveblog.summarizer import _hms, _parse_seconds_list, _transcript_span
 
 VTT = """WEBVTT
 Kind: captions
@@ -67,6 +68,30 @@ def test_fmt_elapsed():
 def test_safe_name_strips_illegal_chars():
     assert "/" not in _safe_name('a/b\\c:d*e?f"g<h>i|j')
     assert len(_safe_name("超" * 100, limit=60)) <= 60
+
+
+def test_hms_is_unambiguous_and_deep_linkable():
+    """時間戳格式的契約:零填充 HH:MM:SS,而且必須能被網頁的跳轉正則解析。
+
+    先前用 {小時}:{分鐘} 產生的 '0:51' 被模型當成 51 秒,導致長影片只總結開頭;
+    後來改用中文「第 N 分鐘」又讓網頁的時間戳連結失效。這個測試同時守住兩者。
+    """
+    assert _hms(3075) == "00:51:15"
+    assert _hms(300) == "00:05:00"
+    assert _hms(3900) == "01:05:00"
+    # 網頁 openHist() 用這個正則把時間戳變成可跳轉連結,格式必須相容
+    rx = re.compile(r"\[(\d+):(\d{2})(?::(\d{2}))?\]")
+    for secs in (0, 300, 2600, 3900):
+        m = rx.fullmatch(f"[{_hms(secs)}]")
+        assert m, f"{_hms(secs)} 無法被跳轉正則解析"
+        h, mi, s = m.groups()
+        assert int(h) * 3600 + int(mi) * 60 + int(s) == secs
+
+
+def test_transcript_span_reads_last_timestamp():
+    assert _transcript_span("[0:30] a [45:12] b") == 2712
+    assert _transcript_span("[00:05:00] a [01:05:00] b") == 3900
+    assert _transcript_span("沒有時間標記") == 0.0
 
 
 def test_glossary_matching(tmp_path, monkeypatch):

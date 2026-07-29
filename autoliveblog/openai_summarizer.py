@@ -284,10 +284,11 @@ class OpenAISummarizer:
                     duration: float | None = None) -> str:
         span = ""
         if duration and duration > 60:
-            mins = int(duration // 60)
-            span = (f"\n這部內容全長約 {mins} 分鐘。**務必涵蓋從頭到尾的完整內容**,"
-                    f"大綱要一路列到最後(約第 {mins} 分鐘),不可只總結開頭。"
-                    f"時間標記寫「第 N 分鐘」,不要用 0:35 這種會被誤讀成秒的格式。")
+            from .summarizer import _hms
+            span = (f"\n這部內容全長 {_hms(duration)}。**務必涵蓋從頭到尾的完整內容**,"
+                    f"大綱要一路列到最後(接近 {_hms(duration)}),不可只總結開頭。"
+                    f"每個時間標記一律寫成 [HH:MM:SS] 零填充格式,"
+                    f"例如 [00:35:00] 代表第 35 分鐘;不可省略成 [35:00]。")
         return f"""請用{self.lang}總結這部影片/Podcast。{self._gloss_note()}{span}
 標題:{title}
 頻道:{channel}

@@ -26,6 +26,12 @@ def _audio_duration(path: Path) -> float:
         return 0.0
 
 
+def _hms(seconds: float) -> str:
+    """秒 → 零填充 HH:MM:SS。語言中立且不會被誤讀成分:秒。"""
+    s = int(seconds)
+    return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+
 def _transcript_span(transcript: str) -> float:
     """從逐字稿最後一個 [時:分:秒] 標記推算內容總長(秒);沒有標記回傳 0。"""
     import re
@@ -135,14 +141,14 @@ class GeminiSummarizer:
         partials: list[str] = []
         for i, seg in enumerate(segs):
             t0, t1 = i * seg_len, min((i + 1) * seg_len, int(dur))
-            # 用「第 N 分鐘」描述,避免 0:30 被誤讀成 30 秒
-            label = f"第 {t0 // 60}~{t1 // 60} 分鐘"
+            # 零填充 HH:MM:SS:不會被誤讀成分:秒,也與網頁跳轉連結的格式一致
+            label = f"{_hms(t0)} ~ {_hms(t1)}"
             prompt = (f"這是「{title}」的第 {i + 1}/{n} 段音訊,"
-                      f"對應整場的{label}(整場共 {int(dur) // 60} 分鐘)。"
+                      f"對應整場的 {label}(整場全長 {_hms(dur)})。"
                       f"請用{self.lang}聆聽後整理這一段的具體重點"
                       f"(人名、數字、結論),條列 4~8 條。"
-                      f"時間點請用「整場的第幾分鐘」表示,"
-                      f"例如「第 {t0 // 60 + 5} 分鐘」,不要用 0:05 這種格式。")
+                      f"每條開頭標上該內容在**整場**的時間,"
+                      f"格式為零填充的 [HH:MM:SS],例如 [{_hms(t0 + 300)}]。")
             try:
                 part = types.Part.from_bytes(data=seg.read_bytes(),
                                              mime_type="audio/mpeg")
@@ -153,11 +159,11 @@ class GeminiSummarizer:
                 print(f"  長音訊分段 {i + 1}/{n} 失敗:{e}")
         merged = "\n\n".join(partials)
         prompt = (self._vod_prompt(title, channel, dur)
-                  + f"\n\n以下是這集({int(dur) // 60} 分鐘)各時段的重點整理。"
+                  + f"\n\n以下是這集(全長 {_hms(dur)})各時段的重點整理。"
                     f"請彙整成一份完整總結,規則:\n"
                     f"- 內容大綱**每個時段至少 2 條**,依時間順序涵蓋全部 {n} 個時段,"
-                    f"最後一條要對應到節目尾聲(約第 {int(dur) // 60} 分鐘)\n"
-                    f"- 時間標記寫「第 N 分鐘」,不要寫成 0:05 這種會被誤讀成秒的格式\n"
+                    f"最後一條要對應到節目尾聲(接近 {_hms(dur)})\n"
+                    f"- 每條大綱開頭標上 [HH:MM:SS] 零填充時間,例如 [00:35:00]\n"
                     f"- 關鍵重點要平均取材於各時段,不可只寫開頭那一段\n\n" + merged)
         return self._generate([prompt])
 
@@ -271,14 +277,15 @@ class GeminiSummarizer:
 
     def _vod_prompt(self, title: str, channel: str,
                     duration: float | None = None) -> str:
-        # 一定要告知總長並要求涵蓋全程:否則模型常只詳述開頭幾分鐘就收尾
+        # 一定要告知總長並要求涵蓋全程:否則模型常只詳述開頭幾分鐘就收尾。
+        # 時間一律用零填充的 [HH:MM:SS]:語言中立、不會被誤讀成秒數,
+        # 且符合網頁把時間戳轉成跳轉連結的格式。
         span = ""
         if duration and duration > 60:
-            mins = int(duration // 60)
-            span = (f"\n這部內容全長約 {mins} 分鐘。**務必涵蓋從頭到尾的完整內容**,"
-                    f"大綱要一路列到最後(約第 {mins} 分鐘),不可只總結開頭。"
-                    f"時間標記一律寫「第 N 分鐘」(例如「第 35 分鐘」),"
-                    f"不要用 0:35 這種容易被誤讀成秒數的格式。")
+            span = (f"\n這部內容全長 {_hms(duration)}。**務必涵蓋從頭到尾的完整內容**,"
+                    f"大綱要一路列到最後(接近 {_hms(duration)}),不可只總結開頭。"
+                    f"每個時間標記一律寫成 [HH:MM:SS] 零填充格式,"
+                    f"例如 [00:35:00] 代表第 35 分鐘;不可省略成 [35:00]。")
         return f"""請用{self.lang}總結這部影片/Podcast。{self._gloss_note()}{span}
 標題:{title}
 頻道:{channel}
