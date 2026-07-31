@@ -413,6 +413,8 @@ class AutoSummarizer:
         self.fallback = None
         self.active = self.primary
         self._switched_at = 0.0
+        # 備援本身也沒額度時,再切過去只會更糟:標記為不可用並回到主引擎
+        self._fallback_dead = False
 
     def set_glossary(self, terms: list[str]) -> None:
         self.glossary = terms or []
@@ -420,7 +422,10 @@ class AutoSummarizer:
         if self.fallback:
             self.fallback.set_glossary(self.glossary)
 
-    def _switch(self):
+    def _switch(self) -> bool:
+        """切到備援;備援已知無額度時回傳 False,讓呼叫端留在主引擎。"""
+        if self._fallback_dead:
+            return False
         if self.fallback is None:
             from .openai_summarizer import OpenAISummarizer
             self.fallback = OpenAISummarizer(lang=self.lang)
@@ -429,6 +434,14 @@ class AutoSummarizer:
             print("⚠ Gemini 受限/過載,自動切換 OpenAI 引擎續跑")
         self.active = self.fallback
         self._switched_at = time.time()
+        return True
+
+    @staticmethod
+    def _is_dead_credit_error(msg: str) -> bool:
+        """餘額耗盡(非暫時性限流):等再久都不會好。"""
+        low = msg.lower()
+        return ("insufficient_quota" in low or "credit_balance_exhausted" in low
+                or "no credits remaining" in low or "billing" in low)
 
     def _call(self, name, *args, **kwargs):
         if (self.active is self.fallback and
@@ -439,12 +452,25 @@ class AutoSummarizer:
             try:
                 return getattr(self.primary, name)(*args, **kwargs)
             except RuntimeError as e:
-                if config.OPENAI_API_KEY and any(
-                        m in str(e) for m in _QUOTA_MARKERS):
-                    self._switch()
-                else:
+                if not (config.OPENAI_API_KEY and any(
+                        m in str(e) for m in _QUOTA_MARKERS)):
                     raise
-        return getattr(self.active, name)(*args, **kwargs)
+                if not self._switch():
+                    # 備援已確定沒額度:與其空轉,不如讓主引擎正常重試
+                    self.primary.retries = 3
+                    return getattr(self.primary, name)(*args, **kwargs)
+        try:
+            return getattr(self.active, name)(*args, **kwargs)
+        except RuntimeError as e:
+            msg = str(e)
+            if self.active is self.fallback and self._is_dead_credit_error(msg):
+                # 備援餘額耗盡:標記後永久回到主引擎,不再被冷卻期釘在死引擎上
+                self._fallback_dead = True
+                self.active = self.primary
+                self.primary.retries = 3
+                print("⚠ OpenAI 餘額已用盡,停用備援並改回 Gemini(正常重試)")
+                return getattr(self.primary, name)(*args, **kwargs)
+            raise
 
     def __getattr__(self, name):
         if name in self._METHODS:

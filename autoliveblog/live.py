@@ -11,6 +11,10 @@ from . import config, export, glossary, notify, ytdl
 from .summarizer import LiveState, make_summarizer
 
 
+# 連續幾段總結失敗就放棄:額度耗盡這類錯誤不會自己好轉
+_MAX_SUMMARY_FAILURES = 3
+
+
 def _safe_name(s: str, limit: int = 60) -> str:
     return re.sub(r'[\\/:*?"<>|\s]+', "_", s).strip("_")[:limit]
 
@@ -178,6 +182,8 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
     next_index = 0          # 下一個待處理的 chunk 編號
     total_started = 0       # 已開出的 chunk 總數(重啟 ffmpeg 時的起始編號)
     consecutive_failures = 0
+    summary_failures = 0    # 連續總結失敗次數(與 ffmpeg 失敗分開計)
+    abort_reason: str | None = None
 
     # 停滯看門狗:ffmpeg 活著但長時間沒有新資料(例如等待室、斷流)就強制重連
     stall_limit = chunk_seconds * 2 + 60
@@ -213,7 +219,7 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
     def process_ready_chunks(include_last: bool = False) -> None:
         """處理已完成的 chunk。chunk N 在 chunk N+1 出現後才算完成;
         include_last=True 時(ffmpeg 已退出)連最後一個也處理。"""
-        nonlocal next_index, consecutive_failures
+        nonlocal next_index, consecutive_failures, summary_failures, abort_reason
         while True:
             # 使用者要求停止時立刻中斷積壓處理,直接進入收尾
             if stop_event is not None and stop_event.is_set() and not include_last:
@@ -293,8 +299,16 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
                     notify.toast(f"話題轉換:{topic}", points[0])
             except Exception as e:
                 consecutive_failures += 1
+                summary_failures += 1
                 print(f"[{elapsed}] ⚠ 總結失敗:{e}")
-                emit({"type": "chunk_error", "elapsed": elapsed, "message": str(e)})
+                emit({"type": "chunk_error", "elapsed": elapsed,
+                      "message": str(e), "consecutive": summary_failures})
+                # 額度耗盡這類錯誤不會自己好轉,繼續空轉只是浪費時間與磁碟
+                if summary_failures >= _MAX_SUMMARY_FAILURES:
+                    abort_reason = (
+                        f"連續 {summary_failures} 段總結失敗,停止監看。"
+                        f"最後的錯誤:{str(e)[:200]}")
+                    return
             cur.unlink(missing_ok=True)
             for f in frames_map.values():
                 f.unlink(missing_ok=True)
@@ -303,6 +317,10 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
     try:
         while True:
             process_ready_chunks()
+            if abort_reason:
+                print(f"\n⚠ {abort_reason}")
+                emit({"type": "error", "message": abort_reason})
+                break
             if stop_event is not None and stop_event.is_set():
                 print("\n收到停止指令,收尾中…")
                 break

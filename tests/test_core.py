@@ -131,6 +131,49 @@ def test_subtitle_track_priority_prefers_original(monkeypatch):
     assert pick({"zh-TW", "en"}, set())[0] == "zh-TW"
 
 
+def test_dead_fallback_does_not_pin_engine():
+    """備援餘額耗盡時要停用它並回到主引擎。
+
+    實際事故:Gemini 撞每分鐘限流 → 切到 OpenAI → OpenAI 餘額 $0 →
+    十分鐘冷卻期把引擎釘在死掉的備援上,一場直播 33 分鐘全部失敗。
+    """
+    from autoliveblog.summarizer import AutoSummarizer
+
+    auto = AutoSummarizer.__new__(AutoSummarizer)  # 不觸發需要金鑰的 __init__
+    auto.lang = None
+    auto.glossary = []
+    auto._switched_at = 0.0
+    auto._fallback_dead = False
+
+    calls = {"primary": 0, "fallback": 0}
+
+    class FakeEngine:
+        def __init__(self, name):
+            self.name = name
+            self.retries = 1
+
+        def _generate(self, *a, **k):
+            calls[self.name] += 1
+            if self.name == "fallback":
+                raise RuntimeError("429 insufficient_quota credit_balance_exhausted")
+            if calls["primary"] <= 1:
+                raise RuntimeError("429 RESOURCE_EXHAUSTED quota")
+            return "ok"
+
+    auto.primary = FakeEngine("primary")
+    auto.fallback = FakeEngine("fallback")
+    auto.active = auto.primary
+
+    # 主引擎受限 → 切備援 → 備援沒錢 → 停用備援並改回主引擎重試,當下就救回來
+    assert auto._call("_generate", ["x"]) == "ok"
+    assert auto._fallback_dead is True
+    assert auto.active is auto.primary
+
+    before = calls["fallback"]
+    assert auto._call("_generate", ["x"]) == "ok"   # 後續直接走主引擎
+    assert calls["fallback"] == before, "不該再呼叫已停用的備援"
+
+
 def test_glossary_matching(tmp_path, monkeypatch):
     monkeypatch.setattr(glossary, "FILE", tmp_path / "g.json")
     glossary.add_terms("財經頻道", ["樺漢(6414)"])

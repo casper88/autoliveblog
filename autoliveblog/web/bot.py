@@ -44,6 +44,7 @@ class TgBot:
         self._last_final: dict[str, bool] = {}
         self._pushed_first: set[str] = set()
         self._stalled_notified: set[str] = set()
+        self._chunk_error_notified: set[str] = set()
         self._started_notified: set[str] = set()
 
     # ---------- 送出 ----------
@@ -127,6 +128,21 @@ class TgBot:
             summary = e.get("summary") or "(直播結束,無最終總結)"
             self.push_q.put((
                 f"✅ <b>最終總結:{_esc(job.title)}</b>\n\n{_esc(summary)}", []))
+        elif t == "chunk_error":
+            # 只在第一次失敗時通知:重點是讓使用者立刻知道,而不是被洗版。
+            # 先前這個事件完全沒推播,結果額度耗盡時使用者盯著沉默等了半小時
+            if job.id not in self._chunk_error_notified:
+                self._chunk_error_notified.add(job.id)
+                msg = _esc(e.get("message", ""))
+                hint = ""
+                if "credit" in msg.lower() or "quota" in msg.lower() \
+                        or "429" in msg:
+                    hint = ("\n\n看起來是 API 額度用完了。Gemini 免費層每天會重置,"
+                            "OpenAI 需要儲值;也可以設 AUTOLIVEBLOG_STT_PROVIDER=local "
+                            "用本地免費轉錄。")
+                self.push_q.put((
+                    f"⚠ <b>{_esc(job.title or '監看中')}</b> 的第一段總結失敗"
+                    f"(<i>{_esc(e.get('elapsed'))}</i>):\n{msg[:400]}{hint}", []))
         elif t == "status" and e.get("status") == "stalled":
             if job.id not in self._stalled_notified:
                 self._stalled_notified.add(job.id)
