@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config, export, glossary, notify, ytdl
+from .i18n import t
 from .summarizer import LiveState, make_summarizer
 
 
@@ -81,29 +82,29 @@ def _start_from_start_pipeline(url: str, out_dir: Path, chunk_seconds: int,
 def _write_live_md(path: Path, title: str, url: str, state: LiveState,
                    started: datetime, final_summary: str | None = None,
                    from_start: bool = False) -> None:
-    ts_note = ("時間軸為直播開始起算" if from_start
-               else "時間軸為監看起算的相對時間")
+    ts_note = (t("md.timeline_note_stream") if from_start
+               else t("md.timeline_note_watch"))
     parts = [
-        f"# 🔴 直播即時總結:{title}\n",
-        f"- 網址:{url}",
-        f"- 開始監看:{started:%Y-%m-%d %H:%M}({ts_note})",
-        f"- 最後更新:{datetime.now():%H:%M:%S}\n",
+        f"# 🔴 {t('md.live_title', title=title)}\n",
+        f"- {t('md.url')}: {url}",
+        f"- {t('md.started')}: {started:%Y-%m-%d %H:%M} ({ts_note})",
+        f"- {t('md.updated')}: {datetime.now():%H:%M:%S}\n",
     ]
     if final_summary:
-        parts += ["---\n", "## ✅ 最終總結\n", final_summary, "\n"]
+        parts += ["---\n", f"## ✅ {t('md.final_summary')}\n", final_summary, "\n"]
     parts += [
         "---\n",
-        f"## 目前話題\n\n**{state.current_topic or '(等待第一段音訊…)'}**\n",
-        f"## 滾動摘要\n\n{state.rolling_summary or '(尚無)'}\n",
+        f"## {t('md.current_topic')}\n\n**{state.current_topic or t('md.waiting')}**\n",
+        f"## {t('md.rolling_summary')}\n\n{state.rolling_summary or t('md.none_yet')}\n",
     ]
     if state.media:
         # md 位於頻道子資料夾,media 在 summaries/media → 相對路徑要往上一層
-        parts += ["## 🔍 重要畫面(模型自主補看)\n"]
+        parts += [f"## 🔍 {t('md.key_frames')}\n"]
         parts += [f"[{el}] ![{el}](../{rp})" for el, rp in state.media[-12:]]
         parts += [""]
     parts += [
-        "## 時間軸\n",
-        "\n\n".join(state.timeline) if state.timeline else "(尚無)",
+        f"## {t('md.timeline')}\n",
+        "\n\n".join(state.timeline) if state.timeline else t("md.none_yet"),
         "",
     ]
     path.write_text("\n".join(parts), encoding="utf-8")
@@ -119,7 +120,7 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
     """on_event:選用 callable(dict),Web 介面用來接收即時事件。
     stop_event:選用 threading.Event,設起來等同按 Ctrl+C(收尾並產最終總結)。"""
     if not config.FFMPEG:
-        raise RuntimeError("直播模式需要 ffmpeg。請安裝:winget install Gyan.FFmpeg.Essentials")
+        raise RuntimeError(t("run.need_ffmpeg"))
     emit = on_event or (lambda e: None)
     chunk_seconds = chunk_seconds or config.CHUNK_SECONDS
     title = info.get("title", "(無標題)")
@@ -142,27 +143,28 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
         if 0 < offset <= 12 * 3600:
             base_offset = offset
             stream_timeline = True
-            print(f"直播已進行 {_fmt_elapsed(base_offset)},時間軸以直播開始起算。")
+            print(t("run.stream_elapsed", elapsed=_fmt_elapsed(base_offset)))
 
     summarizer = make_summarizer(provider=provider, model=model, lang=lang)
     terms = glossary.terms_for(channel)
     if terms and hasattr(summarizer, "set_glossary"):
         summarizer.set_glossary(terms)
-        print(f"已套用「{channel}」專有名詞辭典({len(terms)} 詞)")
+        print(t("run.glossary_applied", channel=channel, n=len(terms)))
     state = LiveState()
     _write_live_md(md_path, title, url, state, started, from_start=stream_timeline)
 
-    print(f"🔴 直播:{title}")
-    print(f"每 {chunk_seconds} 秒總結一次;即時結果寫入:{md_path}")
+    print(f"🔴 {t('run.live_header', title=title)}")
+    print(t("run.summary_interval", n=chunk_seconds, path=md_path))
     if max_chunks:
-        print(f"預計監看 {max_chunks * chunk_seconds // 60} 分鐘({max_chunks} 段)後自動收尾。")
-    print("按 Ctrl+C 停止並產出最終總結。\n")
+        print(t("run.will_stop_after", mins=max_chunks * chunk_seconds // 60,
+                n=max_chunks))
+    print(t("run.ctrl_c") + "\n")
     emit({"type": "started", "title": title, "video_id": vid,
           "md_path": str(md_path), "chunk_seconds": chunk_seconds})
 
     tmp = ytdl.make_temp_dir("autoliveblog_live_")
     if from_start and (frames_interval or smart_frames):
-        print("補課模式下畫面截圖自動關閉(歷史音訊下載速度快於即時,截圖無法對齊)")
+        print(t("run.frames_off_catchup"))
         frames_interval, smart_frames = 0, False
     # 智慧模式:本地每 10 秒密集抽圖(不花 API),先只送稀疏的那幾張,
     # 模型要求加看時再從密集圖庫撈
@@ -171,7 +173,7 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
     want_video = capture_interval > 0
     p_dl = None
     if from_start:
-        print("補課模式:從直播開頭下載,快速消化歷史段落後接上即時進度…")
+        print(t("run.catchup_mode"))
         p_dl, proc = _start_from_start_pipeline(url, tmp, chunk_seconds,
                                                 cookies_from_browser)
     else:
@@ -266,8 +268,8 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
                 points = data.get("new_points") or []
                 print(f"[{elapsed}] 🗣 {topic}")
                 if data.get("_requested_frames"):
-                    print(f"         🔍 模型自主要求加看 "
-                          f"{data['_requested_frames']} 秒處的畫面並精修")
+                    print("         🔍 " + t("run.smart_request",
+                                             secs=data["_requested_frames"]))
                 for p in points:
                     print(f"         - {p}")
                 # 模型補看過的截圖 = 它自己認定重要的畫面 → 保留下來
@@ -296,18 +298,17 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
                       "topic_hits": data.get("topic_hits") or [],
                       "rolling_summary": state.rolling_summary})
                 if data.get("topic_changed") and points and not no_toast:
-                    notify.toast(f"話題轉換:{topic}", points[0])
+                    notify.toast(t("run.topic_changed", topic=topic), points[0])
             except Exception as e:
                 consecutive_failures += 1
                 summary_failures += 1
-                print(f"[{elapsed}] ⚠ 總結失敗:{e}")
+                print(f"[{elapsed}] ⚠ " + t("run.summary_failed", err=e))
                 emit({"type": "chunk_error", "elapsed": elapsed,
                       "message": str(e), "consecutive": summary_failures})
                 # 額度耗盡這類錯誤不會自己好轉,繼續空轉只是浪費時間與磁碟
                 if summary_failures >= _MAX_SUMMARY_FAILURES:
-                    abort_reason = (
-                        f"連續 {summary_failures} 段總結失敗,停止監看。"
-                        f"最後的錯誤:{str(e)[:200]}")
+                    abort_reason = t("run.aborting", n=summary_failures,
+                                     err=str(e)[:200])
                     return
             cur.unlink(missing_ok=True)
             for f in frames_map.values():
@@ -322,17 +323,17 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
                 emit({"type": "error", "message": abort_reason})
                 break
             if stop_event is not None and stop_event.is_set():
-                print("\n收到停止指令,收尾中…")
+                print("\n" + t("run.stopping"))
                 break
             if max_chunks and next_index >= max_chunks:
-                print(f"\n已看滿 {max_chunks} 段,收尾中…")
+                print("\n" + t("run.reached_limit", n=max_chunks))
                 break
             sig = _progress_sig()
             if sig != last_sig:
                 last_sig, last_progress = sig, time.time()
             elif proc.poll() is None and \
                     time.time() - last_progress > stall_limit:
-                print(f"⚠ 串流停滯超過 {stall_limit} 秒(可能還沒開播或斷流),強制重連…")
+                print("⚠ " + t("run.stalled", secs=stall_limit))
                 emit({"type": "status", "status": "stalled"})
                 proc.kill()
                 if p_dl and p_dl.poll() is None:
@@ -352,22 +353,22 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
                 except Exception:
                     still_live = False
                 if not still_live:
-                    print("\n直播已結束。")
+                    print("\n" + t("run.stream_ended"))
                     emit({"type": "stream_ended"})
                     break
                 consecutive_failures += 1
                 if consecutive_failures > 5:
-                    print(f"\nffmpeg 連續失敗過多,停止監看。最後錯誤:{stderr[-300:]}")
+                    print("\n" + t("run.too_many_failures", err=stderr[-300:]))
                     break
                 if from_start:
                     # 補課下載中斷:重來會從頭重抓,改從最新進度續看
-                    print("補課下載中斷,改從最新進度續看(中間可能有缺口)…")
+                    print(t("run.catchup_interrupted"))
                     from_start = False
                     if p_dl and p_dl.poll() is None:
                         p_dl.kill()
                     p_dl = None
                 else:
-                    print("串流中斷,重新連線中…")
+                    print(t("run.reconnecting"))
                 total_started = next_index
                 stream_url, _ = ytdl.get_live_audio_url(url, cookies_from_browser,
                                                         want_video=want_video)
@@ -375,7 +376,7 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
                                      capture_interval)
             time.sleep(5)
     except KeyboardInterrupt:
-        print("\n收到停止指令,產出最終總結中…")
+        print("\n" + t("run.stopping"))
     finally:
         for p in (proc, p_dl):
             if p and p.poll() is None:
@@ -401,11 +402,11 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
             print(final)
             print("=" * 60)
         except Exception as e:
-            print(f"最終總結失敗:{e}")
-            emit({"type": "error", "message": f"最終總結失敗:{e}"})
+            print(t("run.final_failed", err=e))
+            emit({"type": "error", "message": t("run.final_failed", err=e)})
     _write_live_md(md_path, title, url, state, started, final_summary=final, from_start=from_start)
     export.copy_to_obsidian(md_path)
     shutil.rmtree(tmp, ignore_errors=True)
-    print(f"\n已存檔:{md_path}")
+    print("\n" + t("run.saved", path=md_path))
     emit({"type": "final", "summary": final or "", "md_path": str(md_path)})
     return md_path

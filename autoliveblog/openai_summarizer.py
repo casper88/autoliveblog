@@ -11,9 +11,11 @@ import time
 from pathlib import Path
 
 from . import config, stats
+from .i18n import t
 from .summarizer import LiveState, _parse_seconds_list
 
-_QA_RULES = "記錄裡沒有的資訊請直接說沒有提到,不要腦補。"
+_QA_RULES = ("If the record does not contain the information, say it was not "
+             "mentioned; never make anything up.")
 
 
 def _safe_stem(s: str, limit: int = 80) -> str:
@@ -29,8 +31,7 @@ class OpenAISummarizer:
                  lang: str | None = None):
         key = api_key or config.OPENAI_API_KEY
         if not key:
-            raise RuntimeError(
-                "找不到 OPENAI_API_KEY。請把 OPENAI_API_KEY=sk-... 加入專案根目錄的 .env。")
+            raise RuntimeError(t("engine.no_openai_key"))
         from openai import OpenAI
         self.client = OpenAI(api_key=key, timeout=120)
         self.model = model or config.OPENAI_MODEL
@@ -45,7 +46,8 @@ class OpenAISummarizer:
     def _gloss_note(self) -> str:
         if not self.glossary:
             return ""
-        return ("\n已知專有名詞(拼寫以此為準):" + "、".join(self.glossary))
+        return ("\nKnown proper nouns (always use these spellings): "
+                + ", ".join(self.glossary))
 
     # ---------- 基礎 ----------
 
@@ -70,13 +72,15 @@ class OpenAISummarizer:
                 msg = str(e)
                 if any(k in msg for k in ("invalid_api_key", "401", "403")):
                     stats.record_failure()
-                    raise RuntimeError(f"OpenAI 金鑰無效:{msg}") from e
+                    raise RuntimeError(
+                        t("engine.openai_key_invalid", err=msg)) from e
                 stats.record_retry(msg)
                 wait = 10 * (attempt + 1)
-                print(f"  [OpenAI 呼叫失敗,{wait}s 後重試 {attempt+1}/{retries}] {e}")
+                print("  " + t("engine.openai_retry", wait=wait,
+                               attempt=attempt + 1, retries=retries, err=e))
                 time.sleep(wait)
         stats.record_failure()
-        raise RuntimeError(f"OpenAI 呼叫失敗:{last_err}")
+        raise RuntimeError(t("engine.openai_failed", err=last_err))
 
     def transcribe(self, audio_bytes: bytes, name: str = "chunk.mp3",
                    seconds: float | None = None) -> str:
@@ -106,7 +110,7 @@ class OpenAISummarizer:
         """本地 faster-whisper 轉錄:免費、離線,速度取決於 CPU。"""
         if OpenAISummarizer._local_model is None:
             from faster_whisper import WhisperModel
-            print("[stt] 載入本地 Whisper 模型(small, CPU int8)…")
+            print("[stt] " + t("engine.local_whisper_loading"))
             OpenAISummarizer._local_model = WhisperModel(
                 "small", device="cpu", compute_type="int8")
         segments, _ = OpenAISummarizer._local_model.transcribe(
@@ -133,14 +137,17 @@ class OpenAISummarizer:
                      for i in range(0, len(transcript), size)]
             partials = []
             for i, part in enumerate(parts, 1):
-                p = (f"以下是「{title}」逐字稿的第 {i}/{len(parts)} 段,"
-                     f"請用{self.lang}整理重點(保留時間標記):\n\n{part}")
+                p = (f"This is part {i} of {len(parts)} of the transcript of "
+                     f"“{title}”. Write the key points of this part in "
+                     f"{self.lang}, keeping every timestamp exactly as it "
+                     f"appears:\n\n{part}")
                 partials.append(self._chat([{"role": "user", "content": p}]))
             transcript = "\n\n".join(
-                f"【第 {i} 段重點】\n{s}" for i, s in enumerate(partials, 1))
+                f"=== KEY POINTS OF PART {i} ===\n{s}"
+                for i, s in enumerate(partials, 1))
         from .summarizer import _transcript_span
         prompt = (self._vod_prompt(title, channel, _transcript_span(transcript))
-                  + "\n\n=== 逐字稿 ===\n" + transcript)
+                  + "\n\n=== TRANSCRIPT ===\n" + transcript)
         return self._chat([{"role": "user", "content": prompt}])
 
     def summarize_audio(self, path: Path, title: str, channel: str) -> str:
@@ -154,11 +161,9 @@ class OpenAISummarizer:
         if config.STT_PROVIDER != "local":
             est = dur / 60 * 0.003
             if est > config.MAX_AUTO_SPEND_USD:
-                raise RuntimeError(
-                    f"音訊長 {dur / 60:.0f} 分鐘,OpenAI 轉錄約需 ${est:.2f},"
-                    f"超過自動花費上限 ${config.MAX_AUTO_SPEND_USD}。"
-                    f"若確定要花,請設 AUTOLIVEBLOG_MAX_AUTO_SPEND_USD 提高上限,"
-                    f"或設 AUTOLIVEBLOG_STT_PROVIDER=local 用本地免費轉錄。")
+                raise RuntimeError(t("engine.spend_guard",
+                                     mins=f"{dur / 60:.0f}", cost=f"{est:.2f}",
+                                     cap=config.MAX_AUTO_SPEND_USD))
         transcript = self._transcribe_file(path)
         # 付費轉錄的逐字稿永久保存,避免重複花費。檔名帶節目、標題與音檔名:
         # 只用標題會在長標題被截斷時碰撞,把先前付費買到的逐字稿蓋掉
@@ -173,7 +178,7 @@ class OpenAISummarizer:
         if path.stat().st_size <= limit:
             return self.transcribe(path.read_bytes(), path.name)
         if not config.FFMPEG:
-            raise RuntimeError("音訊超過 24MB 需要 ffmpeg 切段轉錄")
+            raise RuntimeError(t("engine.audio_needs_ffmpeg"))
         from .summarizer import _hms
         seg_seconds = 900
         seg_dir = path.parent / "stt_segments"
@@ -201,33 +206,41 @@ class OpenAISummarizer:
         transcript = self.transcribe(audio_bytes, seconds=float(chunk_seconds))
         context = ""
         if state.rolling_summary:
-            context = (f"\n=== 目前為止的摘要 ===\n{state.rolling_summary}\n"
-                       f"=== 上一段的話題 ===\n{state.current_topic}\n")
-        visual_note = (f"\n另附上這段期間的 {len(images)} 張畫面截圖(依時間順序),"
-                       "請讀取畫面上的資訊(股價、圖表、字卡)納入重點。"
+            context = (f"\n=== SUMMARY SO FAR ===\n{state.rolling_summary}\n"
+                       f"=== TOPIC OF THE PREVIOUS SEGMENT ==="
+                       f"\n{state.current_topic}\n")
+        visual_note = (f"\nAlso attached are {len(images)} screenshots taken "
+                       "during this segment, in chronological order; read the "
+                       "information on screen (share prices, charts, captions) "
+                       "and fold it into the key points."
                        if images else "")
         smart_field = smart_note = ""
         if dense_lookup:
-            smart_field = (',\n  "need_frames": [需要加看畫面的秒數(0~'
-                           f'{chunk_seconds}),最多 3 個;不需要給空陣列]')
-            smart_note = ("\n若逐字稿顯示講者在講解畫面(「看這張圖」等)而附圖不足,"
-                          "用 need_frames 要求加看。")
+            smart_field = (',\n  "need_frames": [seconds you want extra frames '
+                           f'for (0-{chunk_seconds}), at most 3; give an empty '
+                           'array if you do not need any]')
+            smart_note = ("\nIf the transcript shows the speaker explaining "
+                          "something on screen (“look at this chart” and the "
+                          "like) and the attached frames are not enough, use "
+                          "need_frames to ask for more.")
         topic_field = ""
         if topics:
-            topic_field = (',\n  "topic_hits": [內容若與這些主題「語意相關」'
-                           f'(不必字面出現),列出相關者:{topics};否則空陣列]')
-        prompt = f"""你正在即時追蹤直播「{title}」。以下是直播中 {elapsed_label} 左右片段的逐字稿:
-=== 逐字稿 ===
-{transcript or "(這段沒有可辨識的語音)"}
+            topic_field = (',\n  "topic_hits": [if the content is semantically '
+                           'related to any of these topics (they need not appear '
+                           f'literally), list the ones that match: {topics}; '
+                           'otherwise an empty array]')
+        prompt = f"""You are following the live stream “{title}” as it happens. Below is the transcript of the segment from around {elapsed_label} into the stream:
+=== TRANSCRIPT ===
+{transcript or "(no intelligible speech in this segment)"}
 {context}{visual_note}{self._gloss_note()}
-請用{self.lang}回傳 JSON,格式:
+Reply with JSON, values written in {self.lang}. Format:
 {{
-  "current_topic": "一句話描述目前話題",
-  "topic_changed": true或false,
-  "new_points": ["具體重點 1~4 條,含人名、數字、結論"],
-  "rolling_summary": "融合先前摘要後的整體摘要,300字以內"{smart_field}{topic_field}
+  "current_topic": "one sentence describing the current topic",
+  "topic_changed": true or false,
+  "new_points": ["1 to 4 concrete points, including names, numbers and conclusions"],
+  "rolling_summary": "the overall summary with the earlier one merged in, 300 characters or fewer"{smart_field}{topic_field}
 }}{smart_note}
-若無實質內容,new_points 給空陣列並在 current_topic 說明。"""
+If there is no real content, give an empty new_points array and say so in current_topic."""
         content: list = [{"type": "text", "text": prompt}]
         for img in images or []:
             content.append(self._img_part(img))
@@ -240,11 +253,13 @@ class OpenAISummarizer:
             extra = dense_lookup(wanted)
             if extra:
                 data["_requested_frames"] = wanted
-                refine = (f"你剛才的分析:{json.dumps({k: v for k, v in data.items() if not k.startswith('_')}, ensure_ascii=False)}\n"
-                          f"現在補上你要求的時間點附近的 {len(extra)} 張畫面截圖。"
-                          "請重新輸出同格式 JSON(不含 need_frames),"
-                          "把畫面上的具體資訊補進重點,名稱數字以畫面為準。\n"
-                          f"(原逐字稿同上:{transcript[:2000]})")
+                refine = (f"This was your analysis: {json.dumps({k: v for k, v in data.items() if not k.startswith('_')}, ensure_ascii=False)}\n"
+                          f"Here are {len(extra)} screenshots taken around the "
+                          f"moments you asked for. Output JSON again in the same "
+                          f"format (without need_frames), in {self.lang}, folding "
+                          "the concrete information on screen into the key points; "
+                          "where a name or number differs, trust the screen.\n"
+                          f"(the transcript, as before: {transcript[:2000]})")
                 content2: list = [{"type": "text", "text": refine}]
                 for img in extra:
                     # 精修時用高解析讀圖:字卡上的公司名/代碼要看得清楚
@@ -265,17 +280,18 @@ class OpenAISummarizer:
         return data
 
     def finalize_live(self, state: LiveState, title: str) -> str:
-        timeline = "\n\n".join(state.timeline) if state.timeline else "(無記錄)"
-        prompt = f"""以下是直播「{title}」的即時記錄時間軸。請用{self.lang}寫出最終完整總結,包含:
-1. **一句話結論**
-2. **討論了哪些主題**(依時間順序,附時間點)
-3. **關鍵重點與結論**(具體:人名、數字、決定)
-4. **值得注意的細節**
+        timeline = "\n\n".join(state.timeline) if state.timeline else "(no records)"
+        prompt = f"""Below is the timeline recorded live during the stream “{title}”. Write the final, complete summary in {self.lang}, covering:
+1. **The bottom line in one sentence**
+2. **Which topics were discussed** (in chronological order, with their timestamps)
+3. **Key points and conclusions** (be concrete: names, numbers, decisions)
+4. **Details worth noting**
+Those four labels only describe what each part must contain — phrase the headings yourself, in {self.lang}, like the rest of the summary.
 
-=== 時間軸記錄 ===
+=== TIMELINE ===
 {timeline}
 
-=== 最後的滾動摘要 ===
+=== LATEST ROLLING SUMMARY ===
 {state.rolling_summary}"""
         return self._chat([{"role": "user", "content": prompt}])
 
@@ -290,24 +306,26 @@ class OpenAISummarizer:
 
     def _vod_prompt(self, title: str, channel: str,
                     duration: float | None = None) -> str:
+        # 段落標題只用文字描述、不給現成範本:給定範本會被模型原樣抄走,
+        # 英文總結就會冒出中文標題。
         span = ""
         if duration and duration > 60:
             from .summarizer import _hms
-            span = (f"\n這部內容全長 {_hms(duration)}。**務必涵蓋從頭到尾的完整內容**,"
-                    f"大綱要一路列到最後(接近 {_hms(duration)}),不可只總結開頭。"
-                    f"每個時間標記一律寫成 [HH:MM:SS] 零填充格式,"
-                    f"例如 [00:35:00] 代表第 35 分鐘;不可省略成 [35:00]。")
-        return f"""請用{self.lang}總結這部影片/Podcast。{self._gloss_note()}{span}
-標題:{title}
-頻道:{channel}
+            span = (f"\nThe recording is {_hms(duration)} long. **Cover it from "
+                    f"beginning to end**: the outline has to run all the way to "
+                    f"the end (close to {_hms(duration)}), not stop after the "
+                    f"opening. Write every timestamp as a zero-padded "
+                    f"[HH:MM:SS] — [00:35:00] for minute 35, for instance; "
+                    f"never shorten it to [35:00].")
+        return f"""Summarize this video/podcast. Write the whole summary in {self.lang}.{self._gloss_note()}{span}
+Title: {title}
+Channel: {channel}
 
-輸出格式(Markdown):
-## 一句話總結
-## 內容大綱
-(依時間順序,若有時間標記請附上)
-## 關鍵重點
-(具體重點:人名、數據、結論、建議)
-## 值得深入的地方"""
+Answer in Markdown with exactly these four sections, in this order, each opened by its own level-2 heading (##). The section names below only describe what belongs in each section — they are not a template: phrase the headings yourself, in {self.lang}, like the rest of the summary.
+1. One-sentence summary: the whole thing in a single sentence.
+2. Outline: the content in chronological order, with timestamps wherever the transcript has them.
+3. Key points: the concrete substance — names, figures, conclusions, recommendations.
+4. Worth a closer look."""
 
     def _parse_json(self, raw: str, state: LiveState) -> dict:
         try:

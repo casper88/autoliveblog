@@ -12,26 +12,10 @@ import time
 import requests
 
 from .. import config
+from ..i18n import t
 
 _API = f"https://api.telegram.org/bot{config.TELEGRAM_BOT_TOKEN}"
 _ALLOWED = {s.strip() for s in config.TELEGRAM_CHAT_ID.split(",") if s.strip()}
-
-HELP = """<b>autoliveblog 機器人指令</b>
-/watch 網址 — 開始監看直播/影片(自動偵測)
-/watch 網址 補課 — 從直播開頭補課
-/now [任務ID] — 目前話題 + 滾動摘要 + 最新重要截圖
-/ask 問題 — 針對最新任務(或最近總結)提問
-/stop [任務ID] — 停止任務並產出最終總結(多任務時必須指定 ID)
-/jobs — 列出任務與 ID
-/history — 最近 5 份總結
-/sub 頻道網址 [關鍵字,逗號分隔] — 訂閱頻道(開播通知,不自動開始)
-/go 訂閱ID — 對開播中的訂閱開始「補課+即時」總結
-/subs — 訂閱清單
-/pause 訂閱ID、/resume 訂閱ID — 暫停/恢復訂閱
-/unsub 訂閱ID — 取消訂閱
-/digest — 立刻產出今日晨報
-/askall 問題 — 跨所有歷史總結提問
-/glossary 頻道名 詞1,詞2 — 教專有名詞(修同音字)"""
 
 
 def _esc(s: str) -> str:
@@ -55,7 +39,7 @@ class TgBot:
         if not buttons:
             return None
         return json.dumps({"inline_keyboard": [
-            [{"text": t, "callback_data": d[:64]} for t, d in row]
+            [{"text": label, "callback_data": d[:64]} for label, d in row]
             for row in buttons]})
 
     def send_text(self, chat_id: str, text: str, buttons=None):
@@ -101,34 +85,38 @@ class TgBot:
     # ---------- 任務事件 → 推播 ----------
 
     def on_job_event(self, job, e: dict):
-        t = e.get("type")
-        if t == "started" and job.id not in self._started_notified:
+        kind = e.get("type")
+        if kind == "started" and job.id not in self._started_notified:
             # 訂閱自動開播、或網頁啟動的任務 → 通知(bot 指令啟動的已回覆過)
             self._started_notified.add(job.id)
             self.push_q.put((
-                f"▶ 開始監看:<b>{_esc(e.get('title') or job.req.url)}</b>"
-                f"(任務 {job.id})", [],
-                [[("📋 現況", f"/now {job.id}"),
-                  ("⏹ 停止並總結", f"/stop {job.id}")]]))
+                "▶ " + t("bot.watching",
+                         title=_esc(e.get('title') or job.req.url),
+                         job=job.id), [],
+                [[("📋 " + t("bot.btn_status"), f"/now {job.id}"),
+                  ("⏹ " + t("bot.btn_stop"), f"/stop {job.id}")]]))
             return
-        if t == "chunk":
+        if kind == "chunk":
             hits = e.get("keyword_hits") or []
             first = job.id not in self._pushed_first
             self._pushed_first.add(job.id)
             if not (first or e.get("topic_changed") or hits
                     or e.get("images")):
                 return
-            lines = [f"🗣 <b>{_esc(e.get('topic'))}</b>(<i>{_esc(e.get('elapsed'))}</i>)"]
+            lines = ["🗣 " + t("bot.topic", topic=_esc(e.get('topic')),
+                               elapsed=_esc(e.get('elapsed')))]
             if hits:
-                lines.insert(0, f"⚡ 關鍵字命中:{_esc('、'.join(hits))}")
+                lines.insert(0, "⚡ " + t("bot.keyword_hit",
+                                         kw=_esc('、'.join(hits))))
             lines += [f"• {_esc(p)}" for p in (e.get("points") or [])[:4]]
             self.push_q.put((("\n".join(lines)), e.get("images") or []))
-        elif t == "final" and not self._last_final.get(job.id):
+        elif kind == "final" and not self._last_final.get(job.id):
             self._last_final[job.id] = True
-            summary = e.get("summary") or "(直播結束,無最終總結)"
+            summary = e.get("summary") or t("bot.final_empty")
             self.push_q.put((
-                f"✅ <b>最終總結:{_esc(job.title)}</b>\n\n{_esc(summary)}", []))
-        elif t == "chunk_error":
+                "✅ " + t("bot.final_title", title=_esc(job.title))
+                + f"\n\n{_esc(summary)}", []))
+        elif kind == "chunk_error":
             # 只在第一次失敗時通知:重點是讓使用者立刻知道,而不是被洗版。
             # 先前這個事件完全沒推播,結果額度耗盡時使用者盯著沉默等了半小時
             if job.id not in self._chunk_error_notified:
@@ -137,20 +125,22 @@ class TgBot:
                 hint = ""
                 if "credit" in msg.lower() or "quota" in msg.lower() \
                         or "429" in msg:
-                    hint = ("\n\n看起來是 API 額度用完了。Gemini 免費層每天會重置,"
-                            "OpenAI 需要儲值;也可以設 AUTOLIVEBLOG_STT_PROVIDER=local "
-                            "用本地免費轉錄。")
+                    hint = t("bot.quota_hint")
                 self.push_q.put((
-                    f"⚠ <b>{_esc(job.title or '監看中')}</b> 的第一段總結失敗"
-                    f"(<i>{_esc(e.get('elapsed'))}</i>):\n{msg[:400]}{hint}", []))
-        elif t == "status" and e.get("status") == "stalled":
+                    "⚠ " + t("bot.chunk_error",
+                             title=_esc(job.title or t("bot.untitled_stream")),
+                             elapsed=_esc(e.get('elapsed')),
+                             err=msg[:400]) + hint, []))
+        elif kind == "status" and e.get("status") == "stalled":
             if job.id not in self._stalled_notified:
                 self._stalled_notified.add(job.id)
                 self.push_q.put((
-                    f"⚠ <b>{_esc(job.title or '直播')}</b> 目前收不到串流資料"
-                    "(可能還沒正式開播),我會自動重連並在有內容時開始推播。", []))
-        elif t == "error":
-            self.push_q.put((f"⚠ 任務錯誤:{_esc(e.get('message'))}", []))
+                    "⚠ " + t("bot.stalled",
+                             title=_esc(job.title
+                                        or t("bot.untitled_stream"))), []))
+        elif kind == "error":
+            self.push_q.put((
+                "⚠ " + t("bot.job_error", err=_esc(e.get('message'))), []))
 
     def _push_worker(self):
         while True:
@@ -173,43 +163,45 @@ class TgBot:
             cmd, arg = "/go", cmd[4:]
 
         if cmd in ("/start", "/help"):
-            self.send_text(chat_id, HELP)
+            self.send_text(chat_id, t("bot.help"))
 
         elif cmd == "/watch":
             if not arg:
-                return self.send_text(chat_id, "用法:/watch 網址 [補課]")
-            from_start = "補課" in arg or "from-start" in arg
+                return self.send_text(chat_id, t("bot.watch_usage"))
+            # 三種寫法都收:英文說明寫 catchup,中文說明寫補課,from-start 是舊寫法
+            from_start = any(k in arg for k in ("補課", "catchup", "from-start"))
             url = arg.split()[0]
             req = server.WatchRequest(url=url, smart=True,
                                       from_start=from_start)
             job = server.launch_job(req)
             self._started_notified.add(job.id)  # 已在此回覆,不再重複推播
             self.send_text(chat_id,
-                           f"▶ 已開始監看(任務 {job.id})"
-                           f"{',補課模式' if from_start else ''}。"
-                           "話題轉換時會推播;隨時 /now 看進度。")
+                           "▶ " + t("bot.watch_started", job=job.id,
+                                    mode=t("bot.mode_catchup")
+                                    if from_start else ""))
 
         elif cmd == "/now":
             job = self._find_job(server, arg) if arg else self._latest_job(server)
             if not job:
-                return self.send_text(chat_id, "找不到任務。用 /jobs 看清單、"
-                                               "/watch 網址 開始。")
+                return self.send_text(chat_id, t("bot.no_jobs"))
             s = job.snapshot()
             lines = [f"📺 <b>{_esc(s['title'] or s['url'])}</b>({_esc(s['status'])})",
-                     f"🗣 目前話題:<b>{_esc(s['current_topic'] or '等待中…')}</b>", ""]
+                     f"🗣 {t('md.current_topic')}:"
+                     f"<b>{_esc(s['current_topic'] or t('md.waiting'))}</b>", ""]
             if s["rolling_summary"]:
                 lines.append(_esc(s["rolling_summary"]))
-            for t in s["timeline"][-2:]:
-                lines.append(f"\n[{_esc(t['elapsed'])}] {_esc(t['topic'])}")
-                lines += [f"• {_esc(p)}" for p in t["points"][:3]]
+            for seg in s["timeline"][-2:]:
+                lines.append(f"\n[{_esc(seg['elapsed'])}] {_esc(seg['topic'])}")
+                lines += [f"• {_esc(p)}" for p in seg["points"][:3]]
             self.send_text(chat_id, "\n".join(lines))
-            images = [img for t in s["timeline"][-3:] for img in t["images"]][-2:]
+            images = [img for seg in s["timeline"][-3:]
+                      for img in seg["images"]][-2:]
             for img in images:
                 self.send_photo(chat_id, config.OUTPUT_DIR / img)
 
         elif cmd == "/ask":
             if not arg:
-                return self.send_text(chat_id, "用法:/ask 你的問題")
+                return self.send_text(chat_id, t("bot.ask_usage"))
             job = self._latest_job(server)
             try:
                 if job:
@@ -217,52 +209,53 @@ class TgBot:
                 else:
                     hist = server.history()
                     if not hist:
-                        return self.send_text(chat_id, "沒有可提問的內容。")
+                        return self.send_text(chat_id, t("bot.no_history"))
                     ans = server.answer_question(
                         arg, history_name=hist[0]["name"])
                 self.send_text(chat_id, f"💬 {_esc(ans)}")
             except Exception as e:
-                self.send_text(chat_id, f"問答失敗:{_esc(e)}")
+                self.send_text(chat_id, t("web.ask_failed", err=_esc(e)))
 
         elif cmd == "/stop":
             if arg:
                 job = self._find_job(server, arg, running_only=True)
                 if not job:
-                    return self.send_text(chat_id, f"找不到進行中的任務「{_esc(arg)}」,"
-                                                   "用 /jobs 看 ID。")
+                    return self.send_text(
+                        chat_id, t("bot.job_not_found", arg=_esc(arg)))
             else:
                 running = [j for j in server.JOBS.values()
                            if j.status == "running"]
                 if not running:
-                    return self.send_text(chat_id, "沒有進行中的任務。")
+                    return self.send_text(chat_id, t("bot.no_running"))
                 if len(running) > 1:
-                    lines = ["有多個任務進行中,請用 /stop ID 指定:"]
+                    lines = [t("bot.pick_job")]
                     lines += [f"<code>{j.id}</code> {_esc((j.title or j.req.url)[:40])}"
                               for j in running]
                     return self.send_text(chat_id, "\n".join(lines))
                 job = running[0]
             job.stop_event.set()
-            self.send_text(chat_id, f"⏹ 已要求停止任務 {job.id}"
-                                    f"({_esc((job.title or '')[:30])}),"
-                                    "最終總結產出後會推播給你。")
+            self.send_text(chat_id,
+                           "⏹ " + t("bot.stopping", job=job.id,
+                                    title=_esc((job.title or '')[:30])))
 
         elif cmd == "/jobs":
             jobs = sorted(server.JOBS.values(), key=lambda j: j.created,
                           reverse=True)[:5]
             if not jobs:
-                return self.send_text(chat_id, "目前沒有任務。")
+                return self.send_text(chat_id, t("bot.no_jobs"))
             lines = [f"{j.id} [{j.status}] {_esc((j.title or j.req.url)[:50])}"
-                     f"(段落 {len(j.timeline)})" for j in jobs]
-            btns = [[(f"📋 {j.id[:4]} 現況", f"/now {j.id}"),
-                     (f"⏹ {j.id[:4]} 停止", f"/stop {j.id}")]
+                     f"({t('bot.n_segments', n=len(j.timeline))})"
+                     for j in jobs]
+            btns = [[("📋 " + t("bot.btn_status_named", name=j.id[:4]),
+                      f"/now {j.id}"),
+                     ("⏹ " + t("bot.btn_stop_named", name=j.id[:4]),
+                      f"/stop {j.id}")]
                     for j in jobs if j.status == "running"]
             self.send_text(chat_id, "\n".join(lines), buttons=btns or None)
 
         elif cmd == "/sub":
             if not arg:
-                return self.send_text(chat_id,
-                                      "用法:/sub 頻道網址 [關鍵字,逗號分隔]\n"
-                                      "例:/sub https://www.youtube.com/@ustvbiz 台積電,比特幣")
+                return self.send_text(chat_id, t("bot.sub_usage"))
             parts = arg.split(None, 1)
             keywords = []
             if len(parts) > 1:
@@ -272,48 +265,51 @@ class TgBot:
                                                  keywords=keywords))
             mins = max(1, config.SUB_POLL_SECONDS // 60)
             self.send_text(chat_id,
-                           f"🔔 已訂閱(ID {r['id']})。每 {mins} 分鐘檢查一次,"
-                           "開播會推播通知並附「開始總結」按鈕(按了才開始,不會自動燒額度)"
-                           + (f";關鍵字:{_esc('、'.join(keywords))}" if keywords else "")
-                           + "。/subs 看清單。")
+                           "🔔 " + t("bot.sub_added", sid=r['id'], mins=mins,
+                                    kw=t("bot.sub_keywords",
+                                         kw=_esc('、'.join(keywords)))
+                                    if keywords else ""))
 
         elif cmd == "/go":
             if not arg:
-                return self.send_text(chat_id, "用法:/go 訂閱ID(/subs 可查)")
+                return self.send_text(chat_id, t("bot.go_usage"))
             try:
                 job = server.start_sub_watch(arg.strip())
                 self._started_notified.add(job.id)
                 self.send_text(chat_id,
-                               f"▶ 開始補課+即時總結(任務 {job.id})。"
-                               "補課速度受 YouTube 限制,開播越久補越久;"
-                               "第一批摘要出來會馬上推播。")
+                               "▶ " + t("bot.go_started", job=job.id))
             except KeyError as e:
-                self.send_text(chat_id, f"無法開始:{_esc(e)}")
+                self.send_text(chat_id, t("bot.cannot_start", err=_esc(e)))
 
         elif cmd == "/subs":
             subs = server.list_subs()
             if not subs:
-                return self.send_text(chat_id, "還沒有訂閱。用 /sub 頻道網址 新增。")
+                return self.send_text(chat_id, t("bot.no_subs"))
             lines = []
             btns = []
             for s in subs:
                 if not s.get("enabled", True):
-                    st = "⏸ 已暫停"
+                    st = "⏸ " + t("bot.sub_status_paused")
                 elif s.get("last_error"):
-                    st = "⚠ 檢查失敗"
+                    st = "⚠ " + t("bot.sub_status_failed")
                 elif s.get("is_feed"):
-                    st = "🎧 Podcast" if s.get("startable") else "🎧 尚無集數"
+                    st = "🎧 " + (t("bot.sub_status_podcast")
+                                 if s.get("startable")
+                                 else t("bot.sub_status_podcast_empty"))
                 else:
-                    st = "🔴 直播中" if s.get("live_now") else "⚪ 未開播"
+                    st = ("🔴 " + t("bot.sub_status_live") if s.get("live_now")
+                          else "⚪ " + t("bot.sub_status_offline"))
                 kw = f" ⚡{_esc('、'.join(s['keywords']))}" if s.get("keywords") else ""
                 lines.append(f"<code>{s['id']}</code> {st} "
                              f"{_esc(s['channel_url'])}{kw}")
                 tag = s["channel_url"].rstrip("/").rsplit("/", 1)[-1][:12]
                 row = []
                 if s.get("startable"):
-                    row.append((f"▶ 開始 {tag}", f"/go {s['id']}"))
-                row.append((("▶ 恢復" if not s.get("enabled", True)
-                             else "⏸ 暫停") + f" {tag}",
+                    row.append(("▶ " + t("bot.btn_start_named", name=tag),
+                                f"/go {s['id']}"))
+                row.append((("▶ " + t("bot.btn_resume", name=tag)
+                             if not s.get("enabled", True)
+                             else "⏸ " + t("bot.btn_pause", name=tag)),
                             ("/resume " if not s.get("enabled", True)
                              else "/pause ") + s["id"]))
                 btns.append(row)
@@ -321,43 +317,48 @@ class TgBot:
 
         elif cmd in ("/pause", "/resume"):
             if not arg:
-                return self.send_text(chat_id, f"用法:{cmd} 訂閱ID(/subs 可查)")
+                return self.send_text(chat_id, t("bot.pause_usage", cmd=cmd))
             ok = server.set_sub_enabled(arg.strip(), cmd == "/resume")
             self.send_text(chat_id,
-                           ("▶ 已恢復" if cmd == "/resume" else "⏸ 已暫停")
-                           + f"訂閱 {_esc(arg)}。" if ok
-                           else f"找不到訂閱「{_esc(arg)}」,/subs 看清單。")
+                           ("▶ " + t("bot.resumed", sid=_esc(arg))
+                            if cmd == "/resume"
+                            else "⏸ " + t("bot.paused", sid=_esc(arg))) if ok
+                           else t("bot.sub_not_found", arg=_esc(arg)))
 
         elif cmd == "/unsub":
             if not arg:
-                return self.send_text(chat_id, "用法:/unsub 訂閱ID(/subs 可查)")
+                return self.send_text(chat_id, t("bot.unsub_usage"))
             try:
                 server.del_sub(arg.strip())
-                self.send_text(chat_id, f"已取消訂閱 {_esc(arg)}。")
+                self.send_text(chat_id, t("bot.unsubbed", sid=_esc(arg)))
             except Exception:
-                self.send_text(chat_id, f"找不到訂閱「{_esc(arg)}」,/subs 看清單。")
+                self.send_text(chat_id,
+                               t("bot.sub_not_found", arg=_esc(arg)))
 
         elif cmd == "/digest":
-            self.send_text(chat_id, "📰 產出中,約 1 分鐘…")
+            self.send_text(chat_id, "📰 " + t("bot.digest_building"))
             def _run():
                 try:
                     d = server.generate_digest()
-                    self.send_text(chat_id, f"📰 <b>今日晨報</b>\n\n{_esc(d)}"
-                                   if d else "今天還沒有任何總結。")
+                    self.send_text(chat_id,
+                                   "📰 " + t("bot.digest_title")
+                                   + f"\n\n{_esc(d)}"
+                                   if d else t("bot.digest_empty"))
                 except Exception as e:
-                    self.send_text(chat_id, f"晨報失敗:{_esc(e)}")
+                    self.send_text(chat_id,
+                                   t("bot.digest_failed", err=_esc(e)))
             threading.Thread(target=_run, daemon=True).start()
 
         elif cmd == "/askall":
             if not arg:
-                return self.send_text(chat_id, "用法:/askall 你的問題(跨所有歷史總結)")
-            self.send_text(chat_id, "🔎 翻閱歷史總結中…")
+                return self.send_text(chat_id, t("bot.askall_usage"))
+            self.send_text(chat_id, "🔎 " + t("web.searching_history"))
             def _runq():
                 try:
                     self.send_text(chat_id,
                                    f"💬 {_esc(server.answer_question_global(arg))}")
                 except Exception as e:
-                    self.send_text(chat_id, f"問答失敗:{_esc(e)}")
+                    self.send_text(chat_id, t("web.ask_failed", err=_esc(e)))
             threading.Thread(target=_runq, daemon=True).start()
 
         elif cmd == "/glossary":
@@ -366,26 +367,27 @@ class TgBot:
             if len(parts) < 2:
                 gl = glossary.load_all()
                 if not gl:
-                    return self.send_text(chat_id,
-                                          "用法:/glossary 頻道名 詞1,詞2\n目前辭典是空的。")
+                    return self.send_text(chat_id, t("bot.glossary_usage"))
                 lines = [f"{ch}:{_esc('、'.join(ts))}" for ch, ts in gl.items()]
-                return self.send_text(chat_id, "目前辭典:\n" + "\n".join(lines))
-            terms = [t.strip() for t in parts[1].replace("，", ",").split(",")
-                     if t.strip()]
+                return self.send_text(
+                    chat_id, t("bot.glossary_current") + "\n" + "\n".join(lines))
+            terms = [w.strip() for w in parts[1].replace("，", ",").split(",")
+                     if w.strip()]
             glossary.add_terms(parts[0], terms)
             self.send_text(chat_id,
-                           f"已加入「{_esc(parts[0])}」辭典:{_esc('、'.join(terms))}")
+                           t("bot.glossary_added", channel=_esc(parts[0]),
+                             terms=_esc('、'.join(terms))))
 
         elif cmd == "/history":
             hist = server.history()[:5]
             if not hist:
-                return self.send_text(chat_id, "還沒有總結紀錄。")
+                return self.send_text(chat_id, t("bot.no_history"))
             lines = [f"{'🔴' if h['is_live'] else '🎬'} {_esc(h['title'][:60])}"
                      for h in hist]
             self.send_text(chat_id, "\n".join(lines))
 
         else:
-            self.send_text(chat_id, HELP)
+            self.send_text(chat_id, t("bot.help"))
 
     @staticmethod
     def _find_job(server, prefix: str, running_only: bool = False):

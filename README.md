@@ -8,9 +8,9 @@ AI livestream and video summarizer for YouTube — real-time rolling summaries w
 
 [繁體中文說明](README.zh-TW.md)
 
-> **Language note.** The web UI, the Telegram bot and the CLI are Traditional Chinese only — there is no localization layer. Summaries follow `AUTOLIVEBLOG_LANG` (default Traditional Chinese) and the pipeline handles source audio in any language, but the interface you drive it with is Chinese.
+> **Language.** The web UI, the Telegram bot and the CLI are English by default, with a Traditional Chinese translation built in — set `AUTOLIVEBLOG_UI_LANG=zh-TW` to switch. Summaries are written in the same language unless you override `AUTOLIVEBLOG_LANG`. Source audio can be in any language regardless of either setting.
 
-![autoliveblog web UI (Traditional Chinese) — live watch of Al Jazeera English with a rolling topic summary](docs/screenshot-web.png)
+![autoliveblog web UI — live watch of Al Jazeera English with a rolling topic summary. The screenshot shows the Traditional Chinese interface](docs/screenshot-web.png)
 
 ## What it does
 
@@ -75,7 +75,8 @@ Autostart at login (with the self-healing watchdog): put a shortcut to `watchdog
 |---|---|---|
 | `AUTOLIVEBLOG_PROVIDER` | auto | Engine: `auto` (Gemini then OpenAI), `gemini`, or `openai` |
 | `AUTOLIVEBLOG_MODEL` | gemini-3.5-flash-lite | Gemini model (lite tiers also handle audio and images) |
-| `AUTOLIVEBLOG_LANG` | 繁體中文 | Output language of the summaries |
+| `AUTOLIVEBLOG_UI_LANG` | en | Interface language: `en` or `zh-TW` |
+| `AUTOLIVEBLOG_LANG` | follows `UI_LANG` | Output language of the summaries; set it to mix languages |
 | `AUTOLIVEBLOG_CHUNK_SECONDS` | 180 | Live summary interval in seconds |
 | `AUTOLIVEBLOG_DIGEST_TIME` | 12:30 | Daily digest time (empty to disable) |
 | `AUTOLIVEBLOG_MAX_AUTO_SPEND_USD` | 0.25 | Per-job OpenAI transcription spending cap |

@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>autoliveblog — YouTube 即時總結</title>
+<title data-i18n="web.title">autoliveblog</title>
 <style>
 :root {
   --bg: #f7f6f3; --card: #ffffff; --ink: #1a1a18; --ink2: #6b6a64;
@@ -85,17 +85,17 @@ details summary { cursor: pointer; color: var(--ink2); font-size: 13px; }
 <div class="wrap">
   <header>
     <h1>autoliveblog</h1>
-    <span class="muted">直播即時總結 · YouTube / Twitch / Podcast</span>
+    <span class="muted" data-i18n="web.tagline"></span>
     <span style="flex:1"></span>
-    <span id="usage" class="badge b-blue" title="今日 Gemini 呼叫數">…</span>
-    <button id="notif-btn" class="small" title="開啟瀏覽器通知">🔔 通知</button>
+    <span id="usage" class="badge b-blue" data-i18n-title="web.usage_hint">…</span>
+    <button id="notif-btn" class="small" data-i18n-title="web.notifications_hint">🔔</button>
   </header>
 
   <div class="card">
     <div class="row">
-      <input type="text" id="url" class="grow" placeholder="貼上直播、影片或 Podcast RSS 網址(YouTube / Twitch / RSS)">
-      <button id="inspect-btn">檢查</button>
-      <button id="start-btn" class="primary">開始</button>
+      <input type="text" id="url" class="grow" data-i18n-ph="web.url_placeholder">
+      <button id="inspect-btn" data-i18n="web.inspect"></button>
+      <button id="start-btn" class="primary" data-i18n="web.start"></button>
     </div>
     <div id="preview" style="display:none; margin-top:12px" class="row">
       <img id="pv-thumb" class="thumb" alt="">
@@ -105,36 +105,36 @@ details summary { cursor: pointer; color: var(--ink2); font-size: 13px; }
       </div>
     </div>
     <div class="row" style="margin-top:12px">
-      <label class="small"><input type="checkbox" id="opt-smart" checked> 智慧補看</label>
-      <label class="small" title="從直播開頭開始總結,快速消化歷史後接上即時"><input type="checkbox" id="opt-fromstart"> 從頭補課</label>
+      <label class="small"><input type="checkbox" id="opt-smart" checked> <span data-i18n="web.smart_frames"></span></label>
+      <label class="small" data-i18n-title="web.from_start_hint"><input type="checkbox" id="opt-fromstart"> <span data-i18n="web.from_start"></span></label>
       <select id="opt-chunk" class="small">
-        <option value="120">每 2 分鐘</option>
-        <option value="180" selected>每 3 分鐘</option>
-        <option value="300">每 5 分鐘</option>
+        <option value="120"></option>
+        <option value="180" selected></option>
+        <option value="300"></option>
       </select>
-      <select id="opt-provider" class="small" title="AI 引擎">
-        <option value="auto" selected>引擎:自動</option>
-        <option value="gemini">引擎:Gemini</option>
-        <option value="openai">引擎:OpenAI</option>
+      <select id="opt-provider" class="small" data-i18n-title="web.engine_hint">
+        <option value="auto" selected></option>
+        <option value="gemini"></option>
+        <option value="openai"></option>
       </select>
       <select id="opt-duration" class="small">
-        <option value="">看到直播結束</option>
-        <option value="10">看 10 分鐘</option>
-        <option value="30">看 30 分鐘</option>
-        <option value="60">看 60 分鐘</option>
-        <option value="120">看 2 小時</option>
+        <option value=""></option>
+        <option value="10"></option>
+        <option value="30"></option>
+        <option value="60"></option>
+        <option value="120"></option>
       </select>
-      <input type="text" id="opt-keywords" class="small grow" placeholder="關鍵字警報(逗號分隔,例:台積電,升息)">
+      <input type="text" id="opt-keywords" class="small grow" data-i18n-ph="web.keywords_placeholder">
     </div>
   </div>
 
   <details style="margin-bottom:12px">
-    <summary class="muted">頻道訂閱(開播自動監看)</summary>
+    <summary class="muted" data-i18n="web.subs_section"></summary>
     <div class="card" style="margin-top:8px">
       <div class="row">
-        <input type="text" id="sub-url" class="grow" placeholder="頻道網址,例:https://www.youtube.com/@ustvbiz">
-        <input type="text" id="sub-keywords" class="small" style="width:180px" placeholder="關鍵字警報(選填)">
-        <button id="sub-add">新增訂閱</button>
+        <input type="text" id="sub-url" class="grow" data-i18n-ph="web.sub_url_placeholder">
+        <input type="text" id="sub-keywords" class="small" style="width:180px" data-i18n-ph="web.sub_keywords_placeholder">
+        <button id="sub-add" data-i18n="web.sub_add"></button>
       </div>
       <div id="subs" style="margin-top:8px"></div>
     </div>
@@ -143,15 +143,15 @@ details summary { cursor: pointer; color: var(--ink2); font-size: 13px; }
   <div id="player-box" style="display:none"></div>
   <div id="jobs"></div>
 
-  <h2>歷史紀錄</h2>
+  <h2 data-i18n="web.history"></h2>
   <div class="row" style="margin-bottom:8px">
-    <input type="text" id="q-all" class="grow small" placeholder="跨所有歷史總結提問,例:游庭皓最近對台積電的看法?">
-    <button id="askall-btn" class="small">問全部</button>
+    <input type="text" id="q-all" class="grow small" data-i18n-ph="web.askall_placeholder">
+    <button id="askall-btn" class="small" data-i18n="web.askall"></button>
   </div>
   <div class="md small" id="ans-all"></div>
   <div class="row" style="margin-bottom:8px">
-    <input type="text" id="hist-search" class="grow small" placeholder="搜尋標題或頻道">
-    <button id="hist-refresh" class="small">重新整理</button>
+    <input type="text" id="hist-search" class="grow small" data-i18n-ph="web.search_placeholder">
+    <button id="hist-refresh" class="small" data-i18n="web.refresh"></button>
   </div>
   <div id="history"></div>
   <div id="viewer" class="card md" style="display:none"></div>

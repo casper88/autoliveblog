@@ -3,13 +3,32 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => (s || "").replace(/[&<>"']/g,
   (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
+// ---------- 介面文字(啟動時向 /api/strings 取回目前語系) ----------
+let S = {};
+// 日期時間跟著介面語系走;undefined = 交給瀏覽器自己的地區設定
+let LOCALE;
+const t = (k, f) => { let s = (S[k] || k); if (f) for (const p in f) s = s.replace("{"+p+"}", f[p]); return s; };
+
+function applyStrings() {
+  document.querySelectorAll("[data-i18n]").forEach(el => el.textContent = t(el.dataset.i18n));
+  document.querySelectorAll("[data-i18n-ph]").forEach(el => el.placeholder = t(el.dataset.i18nPh));
+  document.querySelectorAll("[data-i18n-title]").forEach(el => el.title = t(el.dataset.i18nTitle));
+  // 帶參數的下拉選項:文字由 value 推導,選項本身維持不變
+  document.querySelectorAll("#opt-chunk option").forEach(o =>
+    o.textContent = t("web.every_n_min", { n: o.value / 60 }));
+  const engines = { auto: t("web.engine_auto"), gemini: "Gemini", openai: "OpenAI" };
+  document.querySelectorAll("#opt-provider option").forEach(o =>
+    o.textContent = t("web.engine", { name: engines[o.value] || o.value }));
+  document.querySelectorAll("#opt-duration option").forEach(o =>
+    o.textContent = o.value ? t("web.watch_minutes", { n: o.value }) : t("web.until_end"));
+}
+
 // ---------- 通知 ----------
 $("notif-btn").onclick = () => Notification.requestPermission().then(refreshNotifBtn);
 function refreshNotifBtn() {
-  $("notif-btn").textContent =
-    Notification.permission === "granted" ? "🔔 通知:開" : "🔔 通知";
+  $("notif-btn").textContent = "🔔 " +
+    (Notification.permission === "granted" ? t("web.notifications_on") : t("web.notifications"));
 }
-refreshNotifBtn();
 function notify(title, body) {
   if (Notification.permission === "granted")
     new Notification(title, { body: body || "" });
@@ -20,19 +39,19 @@ async function refreshUsage() {
   try {
     const u = await (await fetch("/api/usage")).json();
     const g = u.gemini, o = u.openai;
-    const parts = [`Gemini ${g.calls} 次 $0`];
-    if (o.calls) parts.push(`OpenAI ${o.calls} 次 $${o.usd.toFixed(3)}`);
+    let text = t("web.usage", { calls: g.calls });
+    if (o.calls) text += t("web.usage_openai", { calls: o.calls });
     const retries = u.retries_429 + u.retries_503;
-    if (retries) parts.push(`重試 ${retries}`);
-    $("usage").textContent = parts.join(" · ");
+    if (retries) text += t("web.usage_retries", { n: retries });
+    $("usage").textContent = text;
     $("usage").title =
-      `Gemini:${(g.in_tokens / 1000).toFixed(1)}k 入 / ${(g.out_tokens / 1000).toFixed(1)}k 出 tokens` +
-      `(免費層 $0;付費層等值 $${g.usd_equivalent.toFixed(3)})\n` +
-      `OpenAI:${(o.in_tokens / 1000).toFixed(1)}k 入 / ${(o.out_tokens / 1000).toFixed(1)}k 出 tokens` +
-      ` + 轉錄 ${(o.audio_seconds / 60).toFixed(1)} 分鐘 = $${o.usd.toFixed(4)}`;
+      t("web.usage_tip_gemini", { in_k: (g.in_tokens / 1000).toFixed(1),
+        out_k: (g.out_tokens / 1000).toFixed(1), usd: g.usd_equivalent.toFixed(3) }) + "\n" +
+      t("web.usage_tip_openai", { in_k: (o.in_tokens / 1000).toFixed(1),
+        out_k: (o.out_tokens / 1000).toFixed(1), mins: (o.audio_seconds / 60).toFixed(1),
+        usd: o.usd.toFixed(4) });
   } catch {}
 }
-refreshUsage(); setInterval(refreshUsage, 30000);
 
 // ---------- 檢查網址 ----------
 let inspected = null;
@@ -51,17 +70,17 @@ $("inspect-btn").onclick = async () => {
     $("pv-title").textContent = inspected.title || "";
     $("pv-channel").textContent = inspected.channel || "";
     $("pv-badge").className = "badge " + (inspected.is_live ? "b-red" : "b-blue");
-    $("pv-badge").textContent = inspected.is_live ? "直播中" : "影片";
+    $("pv-badge").textContent = inspected.is_live ? t("web.live_badge") : t("web.video_badge");
     $("pv-dur").textContent = inspected.duration
-      ? `${Math.floor(inspected.duration / 60)} 分鐘` : "";
-  } catch (e) { alert("無法讀取:" + e.message); }
-  $("inspect-btn").textContent = "檢查";
+      ? t("web.duration_min", { n: Math.floor(inspected.duration / 60) }) : "";
+  } catch (e) { alert(t("web.cannot_read", { err: e.message })); }
+  $("inspect-btn").textContent = t("web.inspect");
 };
 
 // ---------- 開始監看 ----------
 $("start-btn").onclick = async () => {
   const url = $("url").value.trim();
-  if (!url) return alert("請先貼上網址");
+  if (!url) return alert(t("web.enter_url"));
   const body = {
     url, mode: "auto",
     chunk: parseInt($("opt-chunk").value),
@@ -88,26 +107,26 @@ function jobCard(j) {
     <div class="row">
       <span class="badge ${j.is_live ? "b-red" : "b-blue"}" id="st-${j.id}"></span>
       <b class="grow ellip" title="${esc(j.title)}">${esc(j.title || j.url)}</b>
-      <button class="small play-btn">▶ 播放</button>
-      <button class="small" id="stop-${j.id}">停止並總結</button>
-      <button class="small" id="rm-${j.id}">移除</button>
+      <button class="small play-btn">▶ ${esc(t("web.play"))}</button>
+      <button class="small" id="stop-${j.id}">${esc(t("web.stop_and_summarize"))}</button>
+      <button class="small" id="rm-${j.id}">${esc(t("web.remove"))}</button>
     </div>
-    <div class="muted small">目前話題</div>
-    <div class="topic" id="topic-${j.id}">(等待第一段…)</div>
+    <div class="muted small">${esc(t("web.current_topic"))}</div>
+    <div class="topic" id="topic-${j.id}">${esc(t("web.waiting_first"))}</div>
     <div class="stats">
-      <div class="stat"><span class="muted small">已總結段數</span><b id="n-${j.id}">0</b></div>
-      <div class="stat"><span class="muted small">智慧補看</span><b id="sm-${j.id}">0</b></div>
-      <div class="stat"><span class="muted small">關鍵字命中</span><b id="kw-${j.id}">0</b></div>
+      <div class="stat"><span class="muted small">${esc(t("web.segments"))}</span><b id="n-${j.id}">0</b></div>
+      <div class="stat"><span class="muted small">${esc(t("web.smart_hits"))}</span><b id="sm-${j.id}">0</b></div>
+      <div class="stat"><span class="muted small">${esc(t("web.keyword_hits"))}</span><b id="kw-${j.id}">0</b></div>
     </div>
     <div id="alerts-${j.id}"></div>
-    <details><summary>滾動摘要</summary>
+    <details><summary>${esc(t("web.rolling_summary"))}</summary>
       <p class="small" id="roll-${j.id}" style="color:var(--ink2)"></p></details>
-    <div class="muted small" style="margin-top:8px">時間軸(最新在上)</div>
+    <div class="muted small" style="margin-top:8px">${esc(t("web.timeline"))}</div>
     <div class="tl" id="tl-${j.id}"></div>
     <div id="final-${j.id}"></div>
     <div class="row" style="margin-top:10px">
-      <input type="text" id="q-${j.id}" class="grow small" placeholder="問剛剛的內容,例:那檔股票代碼多少?">
-      <button class="small" id="ask-${j.id}">問</button>
+      <input type="text" id="q-${j.id}" class="grow small" placeholder="${esc(t("web.ask_placeholder"))}">
+      <button class="small" id="ask-${j.id}">${esc(t("web.ask"))}</button>
     </div>
     <div class="md small" id="ans-${j.id}"></div>`;
   el.querySelector("#ask-" + j.id).onclick = () => askQuestion(j.id, null);
@@ -115,7 +134,7 @@ function jobCard(j) {
     fetch(`/api/jobs/${j.id}/stop`, { method: "POST" });
   el.querySelector("#rm-" + j.id).onclick = async () => {
     const r = await fetch(`/api/jobs/${j.id}`, { method: "DELETE" });
-    if (r.ok) el.remove(); else alert("執行中的任務要先停止");
+    if (r.ok) el.remove(); else alert(t("web.stop_running_first"));
   };
   return el;
 }
@@ -124,8 +143,9 @@ function renderJob(j) {
   let el = $("job-" + j.id);
   if (!el) { el = jobCard(j); $("jobs").prepend(el); }
   const st = $("st-" + j.id);
-  st.textContent = { starting: "解析中…", running: j.is_live ? "直播監看中" : "總結中",
-    done: "已完成", error: "錯誤" }[j.status] || j.status;
+  st.textContent = { starting: t("web.status_starting"),
+    running: j.is_live ? t("web.status_live") : t("web.status_summarizing"),
+    done: t("web.status_done"), error: t("web.status_error") }[j.status] || j.status;
   st.className = "badge " + (j.status === "error" ? "b-amber"
     : j.status === "done" ? "b-green" : j.is_live ? "b-red" : "b-blue");
   el.querySelector("b.ellip").textContent = j.title || j.url;
@@ -135,21 +155,22 @@ function renderJob(j) {
   if (j.current_topic) $("topic-" + j.id).textContent = j.current_topic;
   $("n-" + j.id).textContent = j.timeline.length;
   $("sm-" + j.id).textContent = j.smart_hits;
-  $("roll-" + j.id).textContent = j.rolling_summary || "(尚無)";
+  $("roll-" + j.id).textContent = j.rolling_summary || t("web.none_yet");
   const tl = $("tl-" + j.id);
-  tl.innerHTML = j.timeline.slice().reverse().map(t => `
-    <div><div>${t.watch_url
-      ? `<a href="${esc(t.watch_url)}" target="_blank"><b class="small">${esc(t.elapsed)}</b></a>`
-      : `<b class="small">${esc(t.elapsed)}</b>`} · ${esc(t.topic)}
-      ${t.smart ? '<span class="badge b-blue small">🔍 補看</span>' : ""}</div>
-      ${(t.points || []).map(p => `<p class="pt">- ${esc(p)}</p>`).join("")}
-      ${(t.images || []).map(img => `<a href="/${esc(img)}" target="_blank"><img src="/${esc(img)}" style="height:64px;border-radius:6px;margin:4px 6px 0 0"></a>`).join("")}</div>`
+  tl.innerHTML = j.timeline.slice().reverse().map(t2 => `
+    <div><div>${t2.watch_url
+      ? `<a href="${esc(t2.watch_url)}" target="_blank"><b class="small">${esc(t2.elapsed)}</b></a>`
+      : `<b class="small">${esc(t2.elapsed)}</b>`} · ${esc(t2.topic)}
+      ${t2.smart ? `<span class="badge b-blue small">🔍 ${esc(t("web.smart_badge"))}</span>` : ""}</div>
+      ${(t2.points || []).map(p => `<p class="pt">- ${esc(p)}</p>`).join("")}
+      ${(t2.images || []).map(img => `<a href="/${esc(img)}" target="_blank"><img src="/${esc(img)}" style="height:64px;border-radius:6px;margin:4px 6px 0 0"></a>`).join("")}</div>`
   ).join("");
   if (j.status === "error" && j.error)
-    $("final-" + j.id).innerHTML = `<div class="alert">錯誤:${esc(j.error)}</div>`;
+    $("final-" + j.id).innerHTML =
+      `<div class="alert">${esc(t("web.error", { err: j.error }))}</div>`;
   if (j.final_summary)
     $("final-" + j.id).innerHTML =
-      `<h2>最終總結</h2><div class="md">${marked.parse(j.final_summary)}</div>`;
+      `<h2>${esc(t("web.final_summary"))}</h2><div class="md">${marked.parse(j.final_summary)}</div>`;
 }
 
 async function loadJobs() {
@@ -165,17 +186,18 @@ function subscribe(id) {
   es.onmessage = async (m) => {
     const e = JSON.parse(m.data);
     if (e.type === "chunk") {
-      if (e.topic_changed) notify("話題轉換", e.topic);
+      if (e.topic_changed) notify(t("web.notify_topic_changed"), e.topic);
       if (e.keyword_hits && e.keyword_hits.length) {
         kwCount[id] = (kwCount[id] || 0) + e.keyword_hits.length;
         $("kw-" + id).textContent = kwCount[id];
         const box = $("alerts-" + id);
         box.insertAdjacentHTML("afterbegin",
-          `<div class="alert">⚡ 關鍵字「${esc(e.keyword_hits.join("、"))}」:${esc(e.topic)}</div>`);
-        notify("關鍵字:" + e.keyword_hits.join("、"), e.topic);
+          `<div class="alert">⚡ ${esc(t("web.keyword_alert",
+            { kw: e.keyword_hits.join("、"), topic: e.topic }))}</div>`);
+        notify(t("web.notify_keyword", { kw: e.keyword_hits.join("、") }), e.topic);
       }
     }
-    if (e.type === "final") notify("總結完成", "最終總結已產出");
+    if (e.type === "final") notify(t("web.notify_done"), t("web.notify_done_body"));
     const jobs = await (await fetch("/api/jobs")).json();
     const j = jobs.find(x => x.id === id);
     if (j) renderJob(j);
@@ -191,7 +213,7 @@ window.playInline = (embedUrl) => {
   const box = $("player-box");
   box.style.display = "block";
   box.innerHTML = `<div class="row" style="justify-content:flex-end;margin-bottom:4px">
-    <button class="small" onclick="$('player-box').style.display='none';$('player-box').querySelector('iframe')?.remove()">✕ 關閉播放器</button></div>
+    <button class="small" onclick="$('player-box').style.display='none';$('player-box').querySelector('iframe')?.remove()">✕ ${esc(t("web.close_player"))}</button></div>
     <iframe src="${esc(embedUrl)}" allow="autoplay; encrypted-media" allowfullscreen></iframe>`;
 };
 
@@ -207,12 +229,12 @@ function renderHistory() {
     .filter(h => !q || h.title.includes(q) || (h.channel || "").includes(q))
     .map(h => `
     <div class="hist-item" onclick="openHist('${esc(h.name)}', '${esc(h.watch_base || '')}', '${esc(h.seek_tpl || '')}')">
-      <span class="badge ${h.is_live ? "b-red" : "b-blue"} small">${h.is_live ? "直播" : "影片"}</span>
+      <span class="badge ${h.is_live ? "b-red" : "b-blue"} small">${esc(h.is_live ? t("web.live_badge") : t("web.video_badge"))}</span>
       ${h.channel ? `<span class="badge b-green small">${esc(h.channel)}</span>` : ""}
       <span class="grow ellip">${esc(h.title)}</span>
-      <span class="muted small">${new Date(h.mtime * 1000).toLocaleString("zh-TW", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+      <span class="muted small">${new Date(h.mtime * 1000).toLocaleString(LOCALE, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
       <button class="small" onclick="event.stopPropagation();delHist('${esc(h.name)}')">🗑</button>
-    </div>`).join("") || '<p class="muted">還沒有紀錄</p>';
+    </div>`).join("") || `<p class="muted">${esc(t("web.no_history"))}</p>`;
 }
 $("hist-search").oninput = renderHistory;
 $("hist-refresh").onclick = loadHistory;
@@ -229,15 +251,15 @@ window.openHist = async (name, watchBase, seekTpl) => {
   const v = $("viewer");
   v.style.display = "block";
   v.innerHTML = `<div class="row" style="justify-content:flex-end">
-    <button class="small" onclick="$('viewer').style.display='none'">✕ 關閉</button></div>` + html
+    <button class="small" onclick="$('viewer').style.display='none'">✕ ${esc(t("web.close"))}</button></div>` + html
     + `<div class="row" style="margin-top:10px">
-      <input type="text" id="q-hist" class="grow small" placeholder="針對這份總結提問">
-      <button class="small" onclick="askQuestion(null, '${esc(name)}')">問</button>
+      <input type="text" id="q-hist" class="grow small" placeholder="${esc(t("web.ask_history_placeholder"))}">
+      <button class="small" onclick="askQuestion(null, '${esc(name)}')">${esc(t("web.ask"))}</button>
     </div><div class="md small" id="ans-hist"></div>`;
   v.scrollIntoView({ behavior: "smooth" });
 };
 window.delHist = async (name) => {
-  if (!confirm("刪除這份總結?")) return;
+  if (!confirm(t("web.confirm_delete"))) return;
   await fetch("/api/history/" + encodeURIComponent(name), { method: "DELETE" });
   loadHistory();
 };
@@ -248,7 +270,7 @@ async function askQuestion(jobId, histName) {
   const ansEl = $(jobId ? "ans-" + jobId : "ans-hist");
   const q = qEl.value.trim();
   if (!q) return;
-  ansEl.innerHTML = '<span class="spin"></span> 思考中…';
+  ansEl.innerHTML = `<span class="spin"></span> ${esc(t("web.thinking"))}`;
   try {
     const r = await fetch("/api/ask", { method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -257,7 +279,9 @@ async function askQuestion(jobId, histName) {
     const { answer } = await r.json();
     ansEl.innerHTML = `<div class="alert" style="background:var(--accent-bg);color:var(--accent)">
       ${marked.parse(answer)}</div>`;
-  } catch (e) { ansEl.innerHTML = `<div class="alert">問答失敗:${esc(e.message)}</div>`; }
+  } catch (e) {
+    ansEl.innerHTML = `<div class="alert">${esc(t("web.ask_failed", { err: e.message }))}</div>`;
+  }
 }
 window.askQuestion = askQuestion;
 
@@ -267,16 +291,16 @@ async function loadSubs() {
   $("subs").innerHTML = subs.map(s => `
     <div class="hist-item" style="cursor:default">
       <span class="badge ${s.live_now ? "b-red" : s.is_feed ? "b-green" : "b-blue"} small">
-        ${s.last_error ? "檢查失敗" : s.is_feed ? "Podcast"
-          : s.live_now === null ? "檢查中" : s.live_now ? "直播中" : "未開播"}</span>
+        ${esc(s.last_error ? t("web.check_failed") : s.is_feed ? t("web.podcast")
+          : s.live_now === null ? t("web.checking") : s.live_now ? t("web.live_now") : t("web.not_live"))}</span>
       <span class="grow ellip">${esc(s.channel_url)}
         ${(s.keywords || []).length ? `<span class="muted small">⚡ ${esc(s.keywords.join("、"))}</span>` : ""}</span>
       <span class="muted small">${s.last_check
-        ? "上次檢查 " + new Date(s.last_check * 1000).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" }) : ""}</span>
-      ${s.startable ? `<button class="small primary" onclick="goSub('${s.id}')">▶ 開始總結</button>` : ""}
-      <button class="small" onclick="toggleSub('${s.id}')">${s.enabled ? "暫停" : "啟用"}</button>
+        ? esc(t("web.last_checked", { time: new Date(s.last_check * 1000).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" }) })) : ""}</span>
+      ${s.startable ? `<button class="small primary" onclick="goSub('${s.id}')">▶ ${esc(t("web.start_summary"))}</button>` : ""}
+      <button class="small" onclick="toggleSub('${s.id}')">${esc(s.enabled ? t("web.pause") : t("web.resume"))}</button>
       <button class="small" onclick="delSub('${s.id}')">🗑</button>
-    </div>`).join("") || '<p class="muted small">尚無訂閱。新增後每 3 分鐘檢查一次,開播就自動開始總結。</p>';
+    </div>`).join("") || `<p class="muted small">${esc(t("web.no_subs"))}</p>`;
 }
 $("sub-add").onclick = async () => {
   const u = $("sub-url").value.trim();
@@ -290,8 +314,8 @@ $("sub-add").onclick = async () => {
 };
 window.goSub = async (id) => {
   const r = await fetch(`/api/subscriptions/${id}/go`, { method: "POST" });
-  if (r.ok) { loadJobs(); alert("已開始補課+即時總結"); }
-  else alert("無法開始:" + (await r.json()).detail);
+  if (r.ok) { loadJobs(); alert(t("web.started_watching")); }
+  else alert(t("web.cannot_start", { err: (await r.json()).detail }));
 };
 window.toggleSub = async (id) => {
   await fetch(`/api/subscriptions/${id}/toggle`, { method: "POST" }); loadSubs();
@@ -299,20 +323,35 @@ window.toggleSub = async (id) => {
 window.delSub = async (id) => {
   await fetch(`/api/subscriptions/${id}`, { method: "DELETE" }); loadSubs();
 };
-setInterval(() => { loadSubs(); loadJobs(); }, 60000);
 
 // ---------- 跨影片知識庫問答 ----------
 $("askall-btn").onclick = async () => {
   const q = $("q-all").value.trim();
   if (!q) return;
-  $("ans-all").innerHTML = '<span class="spin"></span> 翻閱歷史總結中…';
+  $("ans-all").innerHTML = `<span class="spin"></span> ${esc(t("web.searching_history"))}`;
   try {
     const r = await fetch("/api/askall", { method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ question: q }) });
     const { answer } = await r.json();
     $("ans-all").innerHTML = `<div class="alert" style="background:var(--accent-bg);color:var(--accent)">${marked.parse(answer)}</div>`;
-  } catch (e) { $("ans-all").innerHTML = `<div class="alert">失敗:${esc(e.message)}</div>`; }
+  } catch (e) {
+    $("ans-all").innerHTML = `<div class="alert">${esc(t("web.ask_failed", { err: e.message }))}</div>`;
+  }
 };
 
-loadJobs(); loadHistory(); loadSubs();
+// ---------- 啟動:先取回文字目錄,再做第一次繪製 ----------
+async function init() {
+  try {
+    const d = await (await fetch("/api/strings")).json();
+    S = d.strings || {};
+    if (d.lang) { document.documentElement.lang = d.lang; LOCALE = d.lang; }
+  } catch {}
+  applyStrings();
+  refreshNotifBtn();
+  refreshUsage();
+  setInterval(refreshUsage, 30000);
+  loadJobs(); loadHistory(); loadSubs();
+  setInterval(() => { loadSubs(); loadJobs(); }, 60000);
+}
+init();

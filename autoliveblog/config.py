@@ -56,7 +56,10 @@ OBSIDIAN_VAULT = env("OBSIDIAN_VAULT", "")
 STT_PROVIDER = env("STT_PROVIDER", "openai")
 # 轉錄語言:空字串=自動偵測;設 zh 可強化中文內容的辨識
 STT_LANG = env("STT_LANG", "")
-LANG = env("LANG", "繁體中文")
+# 介面語言(網頁、Telegram、CLI、報告標題):en 或 zh-TW
+UI_LANG = env("UI_LANG", "en")
+# AI 總結輸出的語言;預設跟著介面語言走
+LANG = env("LANG", "繁體中文" if UI_LANG.lower().startswith("zh") else "English")
 CHUNK_SECONDS = int(env("CHUNK_SECONDS", "180"))
 OUTPUT_DIR = Path(env("OUTPUT_DIR", str(PROJECT_ROOT / "summaries")))
 

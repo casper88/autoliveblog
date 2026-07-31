@@ -8,6 +8,8 @@ YouTube 直播與影片的 AI 總結工具 — 直播即時滾動總結(含畫�
 
 [English](README.md)
 
+> **介面語言**:預設是英文,繁體中文為內建翻譯。在 `.env` 設 `AUTOLIVEBLOG_UI_LANG=zh-TW` 即可切成中文介面,總結也會跟著用中文輸出。
+
 ![autoliveblog 網頁介面 — Al Jazeera English 直播即時總結](docs/screenshot-web.png)
 
 ## 這是什麼
@@ -73,7 +75,8 @@ alb-bg.bat "網址"             同 alb.bat,但在最小化的背景視窗執行
 |---|---|---|
 | `AUTOLIVEBLOG_PROVIDER` | auto | 引擎:`auto`(Gemini 優先、額度耗盡切 OpenAI)、`gemini`、`openai` |
 | `AUTOLIVEBLOG_MODEL` | gemini-3.5-flash-lite | Gemini 模型(lite 系列同樣支援音訊與圖片)|
-| `AUTOLIVEBLOG_LANG` | 繁體中文 | 總結輸出語言 |
+| `AUTOLIVEBLOG_UI_LANG` | en | 介面語言:`en` 或 `zh-TW` |
+| `AUTOLIVEBLOG_LANG` | 跟隨 `UI_LANG` | 總結輸出語言;想介面與總結用不同語言才需要設 |
 | `AUTOLIVEBLOG_CHUNK_SECONDS` | 180 | 直播每幾秒總結一次 |
 | `AUTOLIVEBLOG_DIGEST_TIME` | 12:30 | 每日晨報時間(留空停用) |
 | `AUTOLIVEBLOG_MAX_AUTO_SPEND_USD` | 0.25 | 單次任務 OpenAI 轉錄花費上限 |

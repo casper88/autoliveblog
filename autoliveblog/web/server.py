@@ -12,7 +12,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from .. import config, feeds, live, platforms, stats, vod, ytdl
+from .. import config, feeds, i18n, live, platforms, stats, vod, ytdl
+from ..i18n import t
 
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -249,7 +250,7 @@ def remove_job(jid: str):
     if not job:
         raise HTTPException(404)
     if job.status == "running":
-        raise HTTPException(409, "先停止再移除")
+        raise HTTPException(409, t("web.stop_running_first"))
     del JOBS[jid]
     return {"ok": True}
 
@@ -282,7 +283,7 @@ async def inspect(req: WatchRequest):
     try:
         info = await loop.run_in_executor(None, feeds.get_info_any, req.url)
     except Exception as e:
-        raise HTTPException(400, f"無法讀取網址:{e}")
+        raise HTTPException(400, t("web.cannot_read", err=e))
     return {
         "title": info.get("title"), "channel": info.get("uploader")
         or info.get("channel"), "is_live": bool(info.get("is_live")),
@@ -293,8 +294,22 @@ async def inspect(req: WatchRequest):
 
 # ---------- 歷史紀錄 ----------
 
-_TITLE_RE = re.compile(r"^#\s*(?:🔴\s*直播即時總結:)?(.+)$", re.M)
-_URL_RE = re.compile(r"-\s*網址:(\S+)")
+def _live_title_prefixes() -> list[str]:
+    """各語系的直播標題前綴(含舊版寫死的中文)。歷史檔案可能是任一語言
+    寫成的,列舉全部才不會在切換介面語言後解析不出標題。"""
+    heads = ["直播即時總結:"]
+    for cat in i18n.CATALOGS.values():
+        head = cat.get("md.live_title", "").split("{title}")[0].strip()
+        if head:
+            heads.append(head)
+    return list(dict.fromkeys(heads))
+
+
+_TITLE_RE = re.compile(
+    r"^#\s*(?:🔴\s*(?:%s)\s*)?(.+)$"
+    % "|".join(re.escape(h) for h in _live_title_prefixes()), re.M)
+# 標籤文字會隨語系變動,只認「- 標籤:網址」的形狀,不認特定語言的標籤
+_URL_RE = re.compile(r"^-\s*[^:：\n]{1,40}[:：]\s*(https?://\S+)", re.M)
 
 
 def _history_path(name: str) -> Path:
@@ -460,16 +475,13 @@ def _poll_subs_once():
                 # 剛訂閱時的「最新一集」不算新內容,只記錄不打擾
                 if is_feed and first_seen:
                     continue
+                btns = [[("▶ " + t("bot.btn_start"), f"/go {sid}")]]
                 if is_feed:
-                    _notify_tg(f"🎧 <b>{ch}</b> 有新一集!\n{title}\n\n"
-                               f"想聽再按下面的按鈕(會下載音檔並總結),"
-                               f"不按就只是通知。",
-                               buttons=[[("▶ 開始總結", f"/go {sid}")]])
+                    _notify_tg("🎧 " + t("bot.new_episode", channel=ch,
+                                         title=title), buttons=btns)
                 else:
-                    _notify_tg(f"🔴 <b>{ch}</b> 開播了!\n{title}\n\n"
-                               f"想聽再按下面的按鈕(會先補課開播至今的內容,"
-                               f"再接上即時總結),不按就只是通知。",
-                               buttons=[[("▶ 開始總結", f"/go {sid}")]])
+                    _notify_tg("🔴 " + t("bot.went_live", channel=ch,
+                                         title=title), buttons=btns)
 
 
 def _subs_poller():
@@ -538,10 +550,10 @@ def start_sub_watch(sid: str) -> Job:
     with _SUBS_LOCK:
         s = SUBS.get(sid)
         if not s:
-            raise KeyError("訂閱不存在")
+            raise KeyError(t("bot.sub_not_found", arg=sid))
         vid = s.get("last_started")
         if not vid:
-            raise KeyError("這個訂閱目前沒有偵測到新內容")
+            raise KeyError(t("api.sub_no_content"))
         ch_url = s["channel_url"]
         kw = s.get("keywords") or []
         chunk = s.get("chunk")
@@ -600,30 +612,32 @@ def answer_question(question: str, job_id: str | None = None,
     if job_id:
         job = JOBS.get(job_id)
         if not job:
-            raise KeyError("job 不存在")
+            raise KeyError(t("api.job_not_found"))
         snap = job.snapshot()
         timeline = "\n".join(
-            f"[{t['elapsed']}] {t['topic']}\n" +
-            "\n".join(f"  - {p}" for p in t["points"])
-            for t in snap["timeline"])
-        context = (f"直播標題:{snap['title']}\n"
-                   f"目前話題:{snap['current_topic']}\n"
-                   f"滾動摘要:{snap['rolling_summary']}\n"
-                   f"時間軸:\n{timeline}\n"
-                   f"最終總結:{snap['final_summary']}")
+            f"[{seg['elapsed']}] {seg['topic']}\n" +
+            "\n".join(f"  - {p}" for p in seg["points"])
+            for seg in snap["timeline"])
+        context = (f"Title: {snap['title']}\n"
+                   f"Current topic: {snap['current_topic']}\n"
+                   f"Rolling summary: {snap['rolling_summary']}\n"
+                   f"Timeline:\n{timeline}\n"
+                   f"Final summary: {snap['final_summary']}")
     elif history_name:
         try:
             p = _history_path(history_name)
         except HTTPException:
-            raise KeyError("檔案不存在")
+            raise KeyError(t("api.summary_not_found"))
         context = p.read_text(encoding="utf-8", errors="replace")[:150_000]
     else:
-        raise KeyError("需要 job_id 或 history_name")
+        raise KeyError(t("api.ask_needs_target"))
 
-    prompt = (f"以下是一個直播/影片的即時總結記錄:\n\n{context}\n\n"
-              f"使用者的問題:{question}\n"
-              f"請根據上面的記錄用繁體中文簡潔回答;"
-              f"記錄裡沒有的資訊請直接說沒有提到,不要腦補。")
+    prompt = ("Below is the running summary of a live stream or video:\n\n"
+              f"{context}\n\n"
+              f"User's question: {question}\n"
+              f"Answer concisely in {config.LANG}, using only what the record "
+              "above contains. If the record does not cover it, say so "
+              "instead of guessing.")
     return make_summarizer()._generate([prompt])
 
 
@@ -663,22 +677,29 @@ def generate_digest() -> str | None:
             continue
         p = config.OUTPUT_DIR / h["name"]
         body = p.read_text(encoding="utf-8", errors="replace")
-        entries.append(f"### 來源:{h['channel'] or '未分類'} —"
+        entries.append(f"### Source: {h['channel'] or 'uncategorized'} —"
                        f" {h['title']}\n{body[:2500]}")
         if len(entries) >= 12:
             break
     if not entries:
         return None
-    prompt = (f"以下是今天({today})監看/總結的所有節目重點。"
-              "請用繁體中文彙整成一份「今日財經晨報」,格式:\n"
-              "## 今日一句話\n## 跨節目共同焦點(不同來源都在談什麼,觀點異同)\n"
-              "## 各節目重點速覽(每個來源 2-3 條)\n## 值得追蹤的後續\n\n"
+    prompt = (f"Below are the summaries of everything watched today ({today}),"
+              " one block per source.\n"
+              f"Write a single daily digest in {config.LANG}. Take the subject"
+              " matter from the sources themselves — do not assume any"
+              " particular field. Use these sections:\n"
+              "## In one sentence\n"
+              "## Common threads (what several sources cover, and where they"
+              " disagree)\n"
+              "## Highlights per source (2-3 bullets each)\n"
+              "## Worth following up\n\n"
               + "\n\n---\n\n".join(entries))
     digest = make_summarizer()._generate([prompt])
     ddir = config.OUTPUT_DIR / "_digest"
     ddir.mkdir(parents=True, exist_ok=True)
     out = ddir / f"{today}.md"
-    out.write_text(f"# 今日晨報 {today}\n\n{digest}\n", encoding="utf-8")
+    out.write_text(f"# {t('md.digest_title', date=today)}\n\n{digest}\n",
+                   encoding="utf-8")
     return digest
 
 
@@ -693,7 +714,8 @@ def _digest_scheduler():
                     if not out.exists():
                         digest = generate_digest()
                         if digest:
-                            _notify_tg(f"📰 <b>今日晨報</b>\n\n{digest[:3500]}")
+                            _notify_tg("📰 " + t("bot.digest_title")
+                                       + f"\n\n{digest[:3500]}")
         except Exception as e:
             print(f"[digest] 失敗:{e}")
         time.sleep(55)
@@ -704,7 +726,7 @@ async def digest_run():
     loop = asyncio.get_event_loop()
     digest = await loop.run_in_executor(None, generate_digest)
     if not digest:
-        raise HTTPException(404, "今天還沒有任何總結")
+        raise HTTPException(404, t("bot.digest_empty"))
     return {"digest": digest}
 
 
@@ -717,12 +739,13 @@ def answer_question_global(question: str) -> str:
     s = make_summarizer()
     catalog = [h for h in history() if not h["name"].startswith("_digest/")][:80]
     listing = "\n".join(
-        f"{i}. [{h['channel'] or '未分類'}] "
+        f"{i}. [{h['channel'] or 'uncategorized'}] "
         f"{_dt.date.fromtimestamp(h['mtime'])} {h['title'][:70]}"
         for i, h in enumerate(catalog))
-    pick_prompt = (f"這是歷史節目總結的目錄:\n{listing}\n\n"
-                   f"問題:{question}\n"
-                   "請回 JSON:{\"indexes\": [最相關的至多 5 個編號]}")
+    pick_prompt = (f"Here is a catalog of past summaries:\n{listing}\n\n"
+                   f"Question: {question}\n"
+                   "Reply with JSON: "
+                   "{\"indexes\": [up to 5 most relevant numbers]}")
     try:
         picked = json.loads(s._generate([pick_prompt], json_mode=True))
         idxs = [int(i) for i in picked.get("indexes", [])][:5]
@@ -737,10 +760,12 @@ def answer_question_global(question: str) -> str:
             parts.append(f"=== {_dt.date.fromtimestamp(h['mtime'])} "
                          f"{h['channel']} {h['title']} ===\n{body}")
     if not parts:
-        return "找不到相關的歷史總結。"
-    prompt = ("以下是多份節目總結記錄:\n\n" + "\n\n".join(parts)
-              + f"\n\n問題:{question}\n請用繁體中文回答,引用時標明來源日期與節目;"
-                "記錄裡沒有的資訊請說沒有提到。")
+        return t("api.no_matching_history")
+    prompt = ("Below are several past summaries:\n\n" + "\n\n".join(parts)
+              + f"\n\nQuestion: {question}\n"
+              + f"Answer in {config.LANG}. When you cite something, name the "
+                "source date and programme; if the records do not cover it, "
+                "say so.")
     return s._generate([prompt])
 
 
@@ -763,6 +788,13 @@ def usage():
     snap = stats.snapshot()
     snap["active_jobs"] = sum(1 for j in JOBS.values() if j.status == "running")
     return snap
+
+
+# ---------- 介面文字 ----------
+
+@app.get("/api/strings")
+def strings():
+    return {"lang": i18n.get_lang(), "strings": i18n.catalog()}
 
 
 # ---------- 靜態頁 ----------

@@ -8,6 +8,7 @@ from google import genai
 from google.genai import types
 
 from . import config, stats
+from .i18n import t
 
 
 def _audio_duration(path: Path) -> float:
@@ -83,10 +84,7 @@ class GeminiSummarizer:
         self.glossary: list[str] = []
         key = api_key or config.GEMINI_API_KEY
         if not key:
-            raise RuntimeError(
-                "找不到 GEMINI_API_KEY。請到 https://aistudio.google.com/apikey "
-                "免費申請,並寫入專案根目錄的 .env(參考 .env.example)。"
-            )
+            raise RuntimeError(t("engine.no_gemini_key"))
         # 明確設 timeout(毫秒):預設無上限,網路異常時呼叫會永久懸掛
         self.client = genai.Client(
             api_key=key,
@@ -100,7 +98,7 @@ class GeminiSummarizer:
         if len(transcript) > config.MAX_TRANSCRIPT_CHARS:
             return self._summarize_long_text(title, channel, transcript)
         prompt = (self._vod_prompt(title, channel, _transcript_span(transcript))
-                  + "\n\n=== 逐字稿 ===\n" + transcript)
+                  + "\n\n=== TRANSCRIPT ===\n" + transcript)
         return self._generate([prompt])
 
     def _summarize_long_text(self, title: str, channel: str, transcript: str) -> str:
@@ -109,12 +107,15 @@ class GeminiSummarizer:
         parts = [transcript[i:i + size] for i in range(0, len(transcript), size)]
         partials = []
         for i, part in enumerate(parts, 1):
-            p = (f"以下是「{title}」逐字稿的第 {i}/{len(parts)} 段,"
-                 f"請用{self.lang}整理這一段的重點(保留時間標記):\n\n{part}")
+            p = (f"This is part {i} of {len(parts)} of the transcript of "
+                 f"“{title}”. Write the key points of THIS part in {self.lang}, "
+                 f"keeping every timestamp exactly as it appears:\n\n{part}")
             partials.append(self._generate([p]))
-        merged = "\n\n".join(f"【第 {i} 段重點】\n{s}" for i, s in enumerate(partials, 1))
+        merged = "\n\n".join(f"=== KEY POINTS OF PART {i} ===\n{s}"
+                             for i, s in enumerate(partials, 1))
         prompt = (self._vod_prompt(title, channel)
-                  + "\n\n以下是各段落的重點整理,請彙整成一份完整總結:\n\n" + merged)
+                  + "\n\nBelow are the key points of each part of the transcript."
+                    " Merge them into one complete summary:\n\n" + merged)
         return self._generate([prompt])
 
     # ---------- VOD:音訊檔 ----------
@@ -126,7 +127,8 @@ class GeminiSummarizer:
             return self._summarize_long_audio(path, title, channel, dur)
         audio_part = self._audio_part(path)
         prompt = (self._vod_prompt(title, channel, dur)
-                  + "\n請完整聆聽這段音訊(從頭到尾)後進行總結。")
+                  + "\nListen to the whole recording, from beginning to end, "
+                    "before you summarize it.")
         return self._generate([audio_part, prompt])
 
     def _summarize_long_audio(self, path: Path, title: str, channel: str,
@@ -149,38 +151,50 @@ class GeminiSummarizer:
             t0, t1 = i * seg_len, min((i + 1) * seg_len, int(dur))
             # 零填充 HH:MM:SS:不會被誤讀成分:秒,也與網頁跳轉連結的格式一致
             label = f"{_hms(t0)} ~ {_hms(t1)}"
-            prompt = (f"這是「{title}」的第 {i + 1}/{n} 段音訊,"
-                      f"對應整場的 {label}(整場全長 {_hms(dur)})。"
-                      f"請用{self.lang}聆聽後整理這一段的具體重點"
-                      f"(人名、數字、結論),條列 4~8 條。"
-                      f"每條開頭標上該內容在**整場**的時間,"
-                      f"格式為零填充的 [HH:MM:SS],例如 [{_hms(t0 + 300)}]。")
+            prompt = (f"This is part {i + 1} of {n} of the audio of “{title}”. "
+                      f"It covers {label} of the recording "
+                      f"(total length {_hms(dur)}). "
+                      f"Listen to it and write the concrete key points of THIS "
+                      f"part in {self.lang} — names, numbers, conclusions — as "
+                      f"4 to 8 bullets. Start every bullet with the time the "
+                      f"point occurs in the **whole** recording, written as a "
+                      f"zero-padded [HH:MM:SS], for example [{_hms(t0 + 300)}].")
             try:
                 part = types.Part.from_bytes(data=seg.read_bytes(),
                                              mime_type="audio/mpeg")
-                partials.append(f"【{label}】\n" + self._generate([part, prompt]))
-                print(f"  長音訊分段 {i + 1}/{n} 完成")
+                partials.append(f"=== {label} ===\n" +
+                                self._generate([part, prompt]))
+                print("  " + t("run.long_audio_part", i=i + 1, n=n))
             except Exception as e:
                 # 失敗的段落不能留下佔位文字:彙整提示詞要求「涵蓋每個時段」,
                 # 模型會替這些空洞編出帶正確時間戳的假內容
                 failed.append(label)
-                print(f"  長音訊分段 {i + 1}/{n} 失敗:{e}")
+                print("  " + t("run.long_audio_failed", i=i + 1, n=n, err=e))
         if not partials:
-            raise RuntimeError(f"長音訊的 {n} 段全部總結失敗,無法產出報告")
+            raise RuntimeError(t("engine.long_audio_all_failed", n=n))
         merged = "\n\n".join(partials)
         gap_note = ""
         if failed:
-            gap_note = (f"- 以下時段無法取得內容:{'、'.join(failed)}。"
-                        f"這些時段**不要出現在大綱裡**,也不可臆測內容;"
-                        f"請在總結末尾註明「以下時段未能解析」並列出\n")
+            gap_note = (f"- No content could be obtained for these stretches: "
+                        f"{', '.join(failed)}. They **must not appear in the "
+                        f"outline** and you must not guess what was said in "
+                        f"them; instead, at the very end of the summary, note "
+                        f"that these stretches could not be processed and list "
+                        f"them\n")
         prompt = (self._vod_prompt(title, channel, dur)
-                  + f"\n\n以下是這集(全長 {_hms(dur)})各時段的重點整理。"
-                    f"請彙整成一份完整總結,規則:\n"
-                    f"- 內容大綱**每個時段至少 2 條**,依時間順序涵蓋下方全部 "
-                    f"{len(partials)} 個時段,最後一條要對應到最後一個時段的結尾\n"
-                    f"- 每條大綱開頭標上 [HH:MM:SS] 零填充時間,例如 [00:35:00]\n"
-                    f"- 關鍵重點要平均取材於各時段,不可只寫開頭那一段\n"
-                    f"- **只根據下方提供的內容撰寫,沒有提到的絕不臆測**\n"
+                  + f"\n\nBelow are the key points for each stretch of this "
+                    f"episode (total length {_hms(dur)}). Merge them into one "
+                    f"complete summary, following these rules:\n"
+                    f"- The outline needs **at least 2 entries per stretch** and "
+                    f"must cover, in chronological order, all {len(partials)} "
+                    f"stretches given below; the last entry has to reach the end "
+                    f"of the final stretch\n"
+                    f"- Start every outline entry with a zero-padded [HH:MM:SS] "
+                    f"timestamp, for example [00:35:00]\n"
+                    f"- Draw the key points evenly from every stretch; do not "
+                    f"write up only the opening one\n"
+                    f"- **Write only from the material below; never invent "
+                    f"anything it does not mention**\n"
                     + gap_note + "\n" + merged)
         return self._generate([prompt])
 
@@ -192,8 +206,9 @@ class GeminiSummarizer:
     def _gloss_note(self) -> str:
         if not self.glossary:
             return ""
-        return ("\n已知專有名詞(聽到相近發音時,一律以此拼寫為準):"
-                + "、".join(self.glossary))
+        return ("\nKnown proper nouns — whenever you hear something that sounds "
+                "close to one of these, always use this spelling: "
+                + ", ".join(self.glossary))
 
     def live_update(self, audio_bytes: bytes, mime: str, state: LiveState,
                     title: str, elapsed_label: str,
@@ -208,34 +223,42 @@ class GeminiSummarizer:
         """
         context = ""
         if state.rolling_summary:
-            context = (f"\n=== 目前為止的摘要 ===\n{state.rolling_summary}\n"
-                       f"=== 上一段的話題 ===\n{state.current_topic}\n")
+            context = (f"\n=== SUMMARY SO FAR ===\n{state.rolling_summary}\n"
+                       f"=== TOPIC OF THE PREVIOUS SEGMENT ==="
+                       f"\n{state.current_topic}\n")
         visual_note = ""
         if images:
-            visual_note = (f"\n另附上這段期間的 {len(images)} 張畫面截圖(依時間順序)。"
-                           "請一併讀取畫面上的資訊(股價、指數、圖表、字卡、跑馬燈),"
-                           "把畫面上的具體數字納入重點。")
+            visual_note = (f"\nAlso attached are {len(images)} screenshots taken "
+                           "during this segment, in chronological order. Read the "
+                           "information on screen as well (share prices, indices, "
+                           "charts, captions, tickers) and fold the concrete "
+                           "numbers you see into the key points.")
         smart_field = ""
         smart_note = ""
         if dense_lookup:
-            smart_field = (',\n  "need_frames": [需要加看畫面的秒數(整數,相對這段音訊開頭'
-                           f',範圍 0~{chunk_seconds}),最多 3 個;不需要就給空陣列]')
-            smart_note = ("\n若講者明顯正在講解畫面上的內容(例如「看這張圖」「畫面上這檔」"
-                          "「這個型態」),而附上的截圖時間點看不到該內容,"
-                          "請用 need_frames 要求加看那幾個時間點的畫面。")
+            smart_field = (',\n  "need_frames": [seconds you want extra frames for '
+                           '(whole numbers, relative to the start of THIS audio '
+                           f'segment, range 0-{chunk_seconds}), at most 3; give an '
+                           'empty array if you do not need any]')
+            smart_note = ("\nIf the speaker is clearly explaining something on "
+                          "screen (“look at this chart”, “this one here”, “this "
+                          "pattern”) and the attached screenshots do not show it, "
+                          "use need_frames to ask for frames at those moments.")
         topic_field = ""
         if topics:
-            topic_field = (',\n  "topic_hits": [這段內容若與這些關注主題「語意相關」'
-                           f'(不必字面出現),列出相關者:{topics};否則空陣列]')
-        prompt = f"""你正在即時收聽直播「{title}」。以下音訊是直播中 {elapsed_label} 左右的最新片段。{context}{visual_note}{self._gloss_note()}
-請聆聽這段音訊,用{self.lang}回傳 JSON(不要有其他文字),格式:
+            topic_field = (',\n  "topic_hits": [if this segment is semantically '
+                           'related to any of these watched topics (they need not '
+                           f'appear literally), list the ones that match: {topics}; '
+                           'otherwise an empty array]')
+        prompt = f"""You are listening to the live stream “{title}” as it happens. The audio below is the latest segment, from around {elapsed_label} into the stream.{context}{visual_note}{self._gloss_note()}
+Listen to this audio and reply with JSON and nothing else. Write the values in {self.lang}. Format:
 {{
-  "current_topic": "一句話描述目前正在討論的話題",
-  "topic_changed": true或false(相較於上一段話題是否明顯轉換),
-  "new_points": ["這段音訊中的具體重點,1~4 條,包含提到的人名、數字、結論"],
-  "rolling_summary": "把先前摘要與這段新內容融合後的整體摘要,300字以內"{smart_field}{topic_field}
+  "current_topic": "one sentence describing what is being discussed right now",
+  "topic_changed": true or false (whether the topic clearly changed from the previous segment),
+  "new_points": ["the concrete points made in this audio, 1 to 4 of them, including any names, numbers and conclusions"],
+  "rolling_summary": "the earlier summary and this new material merged into one overall summary, 300 characters or fewer"{smart_field}{topic_field}
 }}{smart_note}
-若這段音訊只有音樂、待機畫面或無實質內容,new_points 給空陣列並在 current_topic 說明。"""
+If this audio is only music, a standby screen or has no real content, give an empty new_points array and say so in current_topic."""
         audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime)
         parts: list = [audio_part]
         for img in images or []:
@@ -249,13 +272,13 @@ class GeminiSummarizer:
             extra = dense_lookup(wanted)
             if extra:
                 data["_requested_frames"] = wanted
-                refine_prompt = f"""你剛才聽完這段音訊後的分析是:
+                refine_prompt = f"""This was your analysis after listening to that audio:
 {json.dumps({k: v for k, v in data.items() if not k.startswith('_')}, ensure_ascii=False)}
 
-現在補上你要求的時間點({"、".join(str(s) for s in wanted)} 秒)附近的 {len(extra)} 張畫面截圖。
-請重新輸出同格式的 JSON(不要包含 need_frames):
-- 讀取畫面上的具體資訊(數字、股票代碼、名稱、圖表型態、字卡),補進 new_points 與 rolling_summary
-- 若畫面上的正確名稱/數字與你聽到的不同,以畫面為準修正"""
+Here are {len(extra)} screenshots taken around the moments you asked for ({", ".join(str(s) for s in wanted)} seconds).
+Output JSON again in the same format, in {self.lang}, without the need_frames field:
+- Read the concrete information on screen (numbers, ticker symbols, names, chart patterns, captions) and fold it into new_points and rolling_summary
+- Where a name or number on screen differs from what you heard, trust the screen and correct it"""
                 parts2: list = [audio_part]
                 for img in extra:
                     parts2.append(types.Part.from_bytes(data=img,
@@ -276,17 +299,18 @@ class GeminiSummarizer:
 
     def finalize_live(self, state: LiveState, title: str) -> str:
         """直播結束(或手動停止)時,把時間軸彙整成完整總結。"""
-        timeline = "\n\n".join(state.timeline) if state.timeline else "(無記錄)"
-        prompt = f"""以下是直播「{title}」的即時記錄時間軸。請用{self.lang}寫出最終完整總結,包含:
-1. **一句話結論**
-2. **討論了哪些主題**(依時間順序,附時間點)
-3. **關鍵重點與結論**(具體:人名、數字、決定)
-4. **值得注意的細節**
+        timeline = "\n\n".join(state.timeline) if state.timeline else "(no records)"
+        prompt = f"""Below is the timeline recorded live during the stream “{title}”. Write the final, complete summary in {self.lang}, covering:
+1. **The bottom line in one sentence**
+2. **Which topics were discussed** (in chronological order, with their timestamps)
+3. **Key points and conclusions** (be concrete: names, numbers, decisions)
+4. **Details worth noting**
+Those four labels only describe what each part must contain — phrase the headings yourself, in {self.lang}, like the rest of the summary.
 
-=== 時間軸記錄 ===
+=== TIMELINE ===
 {timeline}
 
-=== 最後的滾動摘要 ===
+=== LATEST ROLLING SUMMARY ===
 {state.rolling_summary}"""
         return self._generate([prompt])
 
@@ -297,24 +321,25 @@ class GeminiSummarizer:
         # 一定要告知總長並要求涵蓋全程:否則模型常只詳述開頭幾分鐘就收尾。
         # 時間一律用零填充的 [HH:MM:SS]:語言中立、不會被誤讀成秒數,
         # 且符合網頁把時間戳轉成跳轉連結的格式。
+        # 段落標題只用文字描述、不給現成範本:給定範本會被模型原樣抄走,
+        # 英文總結就會冒出中文標題。
         span = ""
         if duration and duration > 60:
-            span = (f"\n這部內容全長 {_hms(duration)}。**務必涵蓋從頭到尾的完整內容**,"
-                    f"大綱要一路列到最後(接近 {_hms(duration)}),不可只總結開頭。"
-                    f"每個時間標記一律寫成 [HH:MM:SS] 零填充格式,"
-                    f"例如 [00:35:00] 代表第 35 分鐘;不可省略成 [35:00]。")
-        return f"""請用{self.lang}總結這部影片/Podcast。{self._gloss_note()}{span}
-標題:{title}
-頻道:{channel}
+            span = (f"\nThe recording is {_hms(duration)} long. **Cover it from "
+                    f"beginning to end**: the outline has to run all the way to "
+                    f"the end (close to {_hms(duration)}), not stop after the "
+                    f"opening. Write every timestamp as a zero-padded "
+                    f"[HH:MM:SS] — [00:35:00] for minute 35, for instance; "
+                    f"never shorten it to [35:00].")
+        return f"""Summarize this video/podcast. Write the whole summary in {self.lang}.{self._gloss_note()}{span}
+Title: {title}
+Channel: {channel}
 
-輸出格式(Markdown):
-## 一句話總結
-## 內容大綱
-(依時間順序列出主要段落,平均分布於整段內容,每段附上時間標記)
-## 關鍵重點
-(具體重點:提到的人名、數據、結論、建議,條列)
-## 值得深入的地方
-(有爭議、留下疑問、或講者特別強調的部分)"""
+Answer in Markdown with exactly these four sections, in this order, each opened by its own level-2 heading (##). The section names below only describe what belongs in each section — they are not a template: phrase the headings yourself, in {self.lang}, like the rest of the summary.
+1. One-sentence summary: the whole thing in a single sentence.
+2. Outline: the main segments in chronological order, spread evenly over the entire recording, every entry carrying its timestamp.
+3. Key points: the concrete substance — names mentioned, figures, conclusions, recommendations — as a bullet list.
+4. Worth a closer look: whatever is contested, left unanswered, or that the speaker stressed."""
 
     def _audio_part(self, path: Path):
         mime = "audio/mp4" if path.suffix.lower() in (".m4a", ".mp4") else \
@@ -327,7 +352,7 @@ class GeminiSummarizer:
             time.sleep(3)
             f = self.client.files.get(name=f.name)
         if f.state and f.state.name == "FAILED":
-            raise RuntimeError(f"Gemini 檔案處理失敗:{path.name}")
+            raise RuntimeError(t("engine.gemini_file_failed", name=path.name))
         return f
 
     def _generate(self, contents: list, json_mode: bool = False,
@@ -355,29 +380,26 @@ class GeminiSummarizer:
                 if any(k in msg for k in ("API key", "API_KEY", "PERMISSION_DENIED",
                                           "UNAUTHENTICATED")):
                     stats.record_failure()
-                    raise RuntimeError(f"Gemini 金鑰無效或無權限:{msg}") from e
+                    raise RuntimeError(
+                        t("engine.gemini_key_invalid", err=msg)) from e
                 # 模型不存在/已下架:重試同一個模型永遠不會成功,直接拋出可行動的訊息
                 if "NOT_FOUND" in msg or "no longer available" in msg:
                     stats.record_failure()
                     raise RuntimeError(
-                        f"Gemini 模型「{self.model}」無法使用(可能已對新專案下架)。"
-                        f"請改用可用的模型,例如設環境變數 "
-                        f"AUTOLIVEBLOG_MODEL=gemini-3.5-flash-lite。原始錯誤:{msg[:200]}"
-                    ) from e
+                        t("engine.gemini_model_gone", model=self.model,
+                          err=msg[:200])) from e
                 # 付費專案的預付點數耗盡:等待重試無用,需要儲值或改用免費層金鑰
                 if "prepayment credits" in msg or "billing" in msg.lower():
                     stats.record_failure()
                     raise RuntimeError(
-                        "Gemini 專案的預付點數已用盡(這不是每日免費額度問題)。"
-                        "請到 https://ai.studio/projects 儲值,或改用未綁定帳單的"
-                        f"免費層金鑰。原始錯誤:{msg[:200]}"
-                    ) from e
+                        t("engine.gemini_credits", err=msg[:200])) from e
                 stats.record_retry(msg)
                 wait = 15 * (attempt + 1)
-                print(f"  [Gemini 呼叫失敗,{wait}s 後重試 {attempt+1}/{retries}] {e}")
+                print("  " + t("engine.gemini_retry", wait=wait,
+                               attempt=attempt + 1, retries=retries, err=e))
                 time.sleep(wait)
         stats.record_failure()
-        raise RuntimeError(f"Gemini 呼叫失敗:{last_err}")
+        raise RuntimeError(t("engine.gemini_failed", err=last_err))
 
     def _parse_live_json(self, raw: str, state: LiveState) -> dict:
         try:
@@ -431,7 +453,7 @@ class AutoSummarizer:
             self.fallback = OpenAISummarizer(lang=self.lang)
             self.fallback.set_glossary(self.glossary)
         if self.active is not self.fallback:
-            print("⚠ Gemini 受限/過載,自動切換 OpenAI 引擎續跑")
+            print("⚠ " + t("engine.switch_to_openai"))
         self.active = self.fallback
         self._switched_at = time.time()
         return True
@@ -446,7 +468,7 @@ class AutoSummarizer:
     def _call(self, name, *args, **kwargs):
         if (self.active is self.fallback and
                 time.time() - self._switched_at > _RETRY_PRIMARY_AFTER):
-            print("↩ 冷卻期結束,回頭嘗試 Gemini")
+            print("↩ " + t("engine.retry_primary"))
             self.active = self.primary
         if self.active is self.primary:
             try:
@@ -468,7 +490,7 @@ class AutoSummarizer:
                 self._fallback_dead = True
                 self.active = self.primary
                 self.primary.retries = 3
-                print("⚠ OpenAI 餘額已用盡,停用備援並改回 Gemini(正常重試)")
+                print("⚠ " + t("engine.fallback_exhausted"))
                 return getattr(self.primary, name)(*args, **kwargs)
             raise
 
@@ -495,6 +517,4 @@ def make_summarizer(provider: str | None = None, model: str | None = None,
     if has_o:
         from .openai_summarizer import OpenAISummarizer
         return OpenAISummarizer(model=model, lang=lang)
-    raise RuntimeError(
-        "找不到任何 API 金鑰。請在 .env 設定 GEMINI_API_KEY(免費,"
-        "https://aistudio.google.com/apikey)或 OPENAI_API_KEY。")
+    raise RuntimeError(t("engine.no_api_key"))

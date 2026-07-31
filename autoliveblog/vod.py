@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config, export, glossary, subtitles, ytdl
+from .i18n import t
 from .summarizer import make_summarizer
 
 
@@ -27,7 +28,7 @@ def _download_direct(audio_url: str, out_dir: Path) -> Path:
 
     parsed = urlparse(audio_url)
     if parsed.scheme not in ("http", "https"):
-        raise RuntimeError(f"不支援的音檔網址:{audio_url[:80]}")
+        raise RuntimeError(t("run.bad_audio_url", url=audio_url[:80]))
     # 副檔名只接受已知音訊格式,避免奇怪路徑產生無效檔名或錯誤 MIME
     ext = Path(parsed.path).suffix.lower()
     if ext not in _AUDIO_EXT:
@@ -42,9 +43,9 @@ def _download_direct(audio_url: str, out_dir: Path) -> Path:
         r.raise_for_status()
         declared = int(r.headers.get("Content-Length") or 0)
         if declared and declared > limit:
-            raise RuntimeError(
-                f"音檔 {declared / 1024 / 1024:.0f} MB 超過上限 "
-                f"{config.MAX_AUDIO_MB} MB(可調 AUTOLIVEBLOG_MAX_AUDIO_MB)")
+            raise RuntimeError(t("run.audio_too_large",
+                                 mb=f"{declared / 1024 / 1024:.0f}",
+                                 limit=config.MAX_AUDIO_MB))
         with open(dst, "wb") as f:
             for chunk in r.iter_content(1 << 16):
                 f.write(chunk)
@@ -53,14 +54,13 @@ def _download_direct(audio_url: str, out_dir: Path) -> Path:
                 if written > limit:
                     f.close()
                     dst.unlink(missing_ok=True)
-                    raise RuntimeError(
-                        f"音檔超過 {config.MAX_AUDIO_MB} MB 上限,已中止下載"
-                        "(這個 enclosure 可能是無限長的串流)")
+                    raise RuntimeError(t("run.audio_limit_hit",
+                                         limit=config.MAX_AUDIO_MB))
                 if time.monotonic() > deadline:
                     f.close()
                     dst.unlink(missing_ok=True)
-                    raise RuntimeError(
-                        f"下載超過 {config.MAX_DOWNLOAD_SECONDS // 60} 分鐘上限,已中止")
+                    raise RuntimeError(t("run.download_timeout",
+                                         mins=config.MAX_DOWNLOAD_SECONDS // 60))
     return dst
 
 
@@ -72,8 +72,9 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
     channel = info.get("uploader") or info.get("channel") or ""
     vid = info.get("id", "video")
     duration = info.get("duration") or 0
-    print(f"影片:{title}")
-    print(f"頻道:{channel}  長度:{duration // 60} 分 {duration % 60} 秒")
+    print(t("run.video_header", title=title))
+    print(t("run.video_meta", channel=channel, mins=duration // 60,
+            secs=duration % 60))
     emit({"type": "started", "title": title, "video_id": vid, "duration": duration})
 
     # Podcast RSS:info 已帶直接音檔網址,沒有字幕可抓,跳過字幕階段
@@ -84,25 +85,25 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
         transcript = None
         vtt = None
         if not direct_audio:
-            print("嘗試下載字幕…")
+            print(t("run.trying_subs"))
             emit({"type": "status", "status": "subtitles"})
             try:
                 vtt = ytdl.download_subtitles(url, tmp, cookies_from_browser)
             except Exception as e:
-                print(f"  字幕下載失敗:{e}")
+                print("  " + t("run.subs_failed", err=e))
                 vtt = None
         if vtt:
             cues = subtitles.parse_vtt(vtt)
             if cues:
                 transcript = subtitles.to_transcript(cues)
-                print(f"  取得字幕({vtt.name},{len(transcript)} 字)")
+                print("  " + t("run.got_subs", name=vtt.name, n=len(transcript)))
 
         if dry_run:
             if transcript:
-                print("\n--- 逐字稿預覽(前 1500 字)---")
+                print("\n" + t("run.transcript_preview"))
                 print(transcript[:1500])
             else:
-                print("沒有字幕;正式執行時會下載音訊交給 Gemini 聽。")
+                print(t("run.no_subs_preview"))
             return None
 
         summarizer = make_summarizer(provider=provider, model=model, lang=lang)
@@ -110,19 +111,21 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
         if terms and hasattr(summarizer, "set_glossary"):
             summarizer.set_glossary(terms)
         if transcript:
-            print("以字幕逐字稿總結中…")
+            print(t("run.summarizing_subs"))
             emit({"type": "status", "status": "summarizing",
                   "source": "subtitles", "chars": len(transcript)})
             summary = summarizer.summarize_text(title, channel, transcript)
         else:
-            print("沒有字幕,下載音訊中…" if not direct_audio else "下載 Podcast 音檔中…")
+            print(t("run.no_subs_audio") if not direct_audio
+                  else t("run.downloading_podcast"))
             emit({"type": "status", "status": "downloading_audio"})
             if direct_audio:
                 audio = _download_direct(direct_audio, tmp)
             else:
                 audio = ytdl.download_audio(url, tmp, cookies_from_browser)
             size_mb = audio.stat().st_size / 1024 / 1024
-            print(f"  音訊下載完成({audio.name},{size_mb:.1f} MB),交給 Gemini 聆聽總結中…")
+            print("  " + t("run.audio_ready", name=audio.name,
+                           mb=f"{size_mb:.1f}"))
             emit({"type": "status", "status": "summarizing", "source": "audio",
                   "size_mb": round(size_mb, 1)})
             summary = summarizer.summarize_audio(audio, title, channel)
@@ -133,13 +136,13 @@ def run(url: str, info: dict, lang: str | None = None, model: str | None = None,
     ch_dir.mkdir(parents=True, exist_ok=True)
     out = ch_dir / f"{datetime.now():%Y%m%d}_{_safe_name(title)}_{vid}.md"
     header = (f"# {title}\n\n"
-              f"- 頻道:{channel}\n- 網址:{url}\n"
-              f"- 總結時間:{datetime.now():%Y-%m-%d %H:%M}\n\n---\n\n")
+              f"- {t('md.channel')}: {channel}\n- {t('md.url')}: {url}\n"
+              f"- {t('md.summarized_at')}: {datetime.now():%Y-%m-%d %H:%M}\n\n---\n\n")
     out.write_text(header + summary + "\n", encoding="utf-8")
     print("\n" + "=" * 60)
     print(summary)
     print("=" * 60)
     export.copy_to_obsidian(out)
-    print(f"\n已存檔:{out}")
+    print("\n" + t("run.saved", path=out))
     emit({"type": "final", "summary": summary, "md_path": str(out)})
     return out
