@@ -131,13 +131,18 @@ def test_subtitle_track_priority_prefers_original(monkeypatch):
     assert pick({"zh-TW", "en"}, set())[0] == "zh-TW"
 
 
-def test_dead_fallback_does_not_pin_engine():
+def test_dead_fallback_does_not_pin_engine(monkeypatch):
     """備援餘額耗盡時要停用它並回到主引擎。
 
     實際事故:Gemini 撞每分鐘限流 → 切到 OpenAI → OpenAI 餘額 $0 →
     十分鐘冷卻期把引擎釘在死掉的備援上,一場直播 33 分鐘全部失敗。
     """
+    from autoliveblog import config
     from autoliveblog.summarizer import AutoSummarizer
+
+    # _call 只在「有 OpenAI 金鑰」時才會切備援。開發機的 .env 通常有金鑰所以
+    # 會通過,CI 沒有 .env 就整個測試失效 —— 這裡明確給值,兩邊行為才一致。
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")
 
     auto = AutoSummarizer.__new__(AutoSummarizer)  # 不觸發需要金鑰的 __init__
     auto.lang = None
